@@ -46,10 +46,17 @@ final class CaptureOverlayNSView: NSView {
                                   options: [.activeAlways, .mouseMoved, .mouseEnteredAndExited],
                                   owner: self, userInfo: nil)
         addTrackingArea(area)
-        window?.makeFirstResponder(self)
-        // 让系统在光标进入本视图区域时应用十字光标
-        window?.invalidateCursorRects(for: self)
     }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        window.makeFirstResponder(self)
+        window.invalidateCursorRects(for: self)
+    }
+
+    /// 首次点击即可接收事件并把窗口变成 key 窗口（否则边窗口无标题栏无法成为 key）
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     /// 鼠标进入选区视图时统一显示十字光标（离开后自动恢复原光标）
     override func resetCursorRects() {
@@ -79,7 +86,9 @@ final class CaptureOverlayNSView: NSView {
         currentPoint = nil
 
         let rect = rect(from: start, to: end)
-        if rect.width >= 1 && rect.height >= 1 {
+        if rect.width < 1 && rect.height < 1 {
+            onComplete?(CGRect(origin: .zero, size: screen.frame.size))
+        } else if rect.width >= 1 && rect.height >= 1 {
             onComplete?(rect)
         } else {
             onCancel?()
@@ -160,6 +169,8 @@ final class CaptureOverlayWindow: NSWindow {
         self.ignoresMouseEvents = false
         self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         self.acceptsMouseMovedEvents = true
+        self.animationBehavior = .none
+        self.isReleasedWhenClosed = false
         self.setFrame(screen.frame, display: false)
 
         let overlay = CaptureOverlayNSView(screen: screen)
@@ -168,4 +179,8 @@ final class CaptureOverlayWindow: NSWindow {
         overlay.setupTracking()
         self.contentView = overlay
     }
+
+    /// 无边框窗口默认不能成为 key 窗口，导致收不到键盘事件（Esc 无效），必须放开
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
 }

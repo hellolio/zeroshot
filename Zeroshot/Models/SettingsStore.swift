@@ -33,34 +33,36 @@ final class SettingsStore: ObservableObject {
         _launchAtLogin = Published(initialValue: defaults.bool(forKey: Keys.launchAtLogin))
         _saveDirectory = Published(initialValue: defaults.string(forKey: Keys.saveDirectory) ?? Self.defaultSaveDirectory)
         _askSaveLocation = Published(initialValue: defaults.bool(forKey: Keys.askSaveLocation))
+        _shortcut = Published(initialValue: Self.loadShortcut(from: defaults))
         ensureDefaultDirectoryExists()
     }
 
     // MARK: - 快捷键
 
-    var shortcut: ShortcutKey {
-        get {
-            let keyCode = UInt16(defaults.integer(forKey: Keys.shortcutKeyCode))
-            let modifiers = UInt(defaults.integer(forKey: Keys.shortcutModifiers))
-            if keyCode == 0 && defaults.object(forKey: Keys.shortcutKeyCode) == nil {
-                return .standard
-            }
-            var char = ShortcutKey.standard.character
-            if let mapped = Self.character(forKeyCode: keyCode) {
-                char = mapped
-            }
-            return ShortcutKey(character: char, keyCode: keyCode,
-                               modifiers: NSEvent.ModifierFlags(rawValue: modifiers))
-        }
-        set {
-            defaults.set(Int(newValue.keyCode), forKey: Keys.shortcutKeyCode)
-            defaults.set(Int(newValue.modifiers.rawValue), forKey: Keys.shortcutModifiers)
+    @Published var shortcut: ShortcutKey {
+        didSet {
+            defaults.set(Int(shortcut.keyCode), forKey: Keys.shortcutKeyCode)
+            defaults.set(Int(shortcut.modifiers.rawValue), forKey: Keys.shortcutModifiers)
             NotificationCenter.default.post(
                 name: GlobalHotkeyManager.didChangeNotification,
                 object: nil,
-                userInfo: ["shortcut": newValue]
+                userInfo: ["shortcut": shortcut]
             )
         }
+    }
+
+    private static func loadShortcut(from defaults: UserDefaults) -> ShortcutKey {
+        let keyCode = UInt16(defaults.integer(forKey: Keys.shortcutKeyCode))
+        let modifiers = UInt(defaults.integer(forKey: Keys.shortcutModifiers))
+        if keyCode == 0 && defaults.object(forKey: Keys.shortcutKeyCode) == nil {
+            return .standard
+        }
+        var char = ShortcutKey.standard.character
+        if let mapped = character(forKeyCode: keyCode) {
+            char = mapped
+        }
+        return ShortcutKey(character: char, keyCode: keyCode,
+                           modifiers: NSEvent.ModifierFlags(rawValue: modifiers))
     }
 
     /// 尝试把 macOS ANSI 键码映射为可显示字符

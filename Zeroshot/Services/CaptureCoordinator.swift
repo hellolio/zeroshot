@@ -107,6 +107,7 @@ final class CaptureCoordinator: ObservableObject {
         guard let window = overlayWindow(for: screen) else { return }
         window.orderOut(nil)
         isActive = false
+        teardownOverlays()
 
         Task {
             ZSLog("capturing screen=\(screen.frame) rect=\(rect)")
@@ -118,15 +119,25 @@ final class CaptureCoordinator: ObservableObject {
             ZSLog("capture OK size=\(image.size)")
             await MainActor.run {
                 self.openEditor(image: image)
-                self.overlayWindows.removeAll()
             }
         }
     }
 
     private func cancelSelection() {
-        overlayWindows.forEach { $0.close() }
-        overlayWindows.removeAll()
         isActive = false
+        teardownOverlays()
+    }
+
+    /// 延迟到下一轮事件循环再关闭遮罩窗口，避免在 keyDown/mouseUp 事件处理中
+    /// close 正在派发事件的窗口导致释放后用崩溃（EXC_BAD_ACCESS）。
+    private func teardownOverlays() {
+        let windows = overlayWindows
+        overlayWindows = []
+        DispatchQueue.main.async {
+            windows.forEach { $0.orderOut(nil) }
+            NSCursor.arrow.set()
+            windows.forEach { $0.close() }
+        }
     }
 
     private func overlayWindow(for screen: NSScreen) -> CaptureOverlayWindow? {
