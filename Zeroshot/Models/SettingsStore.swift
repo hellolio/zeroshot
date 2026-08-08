@@ -30,6 +30,9 @@ final class SettingsStore: ObservableObject {
             Keys.saveDirectory: Self.defaultSaveDirectory,
             Keys.askSaveLocation: false,
         ])
+        _launchAtLogin = Published(initialValue: defaults.bool(forKey: Keys.launchAtLogin))
+        _saveDirectory = Published(initialValue: defaults.string(forKey: Keys.saveDirectory) ?? Self.defaultSaveDirectory)
+        _askSaveLocation = Published(initialValue: defaults.bool(forKey: Keys.askSaveLocation))
         ensureDefaultDirectoryExists()
     }
 
@@ -73,19 +76,43 @@ final class SettingsStore: ObservableObject {
 
     // MARK: - 启动
 
-    var launchAtLogin: Bool {
-        get { defaults.bool(forKey: Keys.launchAtLogin) }
-        set {
-            defaults.set(newValue, forKey: Keys.launchAtLogin)
-            if #available(macOS 13.0, *) {
+    /// 防止注册失败回滚时的重入循环
+    private var isSyncingLaunchAtLogin = false
+
+    @Published var launchAtLogin: Bool {
+        didSet {
+            guard !isSyncingLaunchAtLogin else { return }
+            isSyncingLaunchAtLogin = true
+            defer { isSyncingLaunchAtLogin = false }
+
+            defaults.set(launchAtLogin, forKey: Keys.launchAtLogin)
+            guard #available(macOS 13.0, *) else { return }
+
+            let status = SMAppService.mainApp.status
+            if launchAtLogin {
                 do {
-                    if newValue {
-                        try SMAppService.mainApp.register()
-                    } else {
-                        try SMAppService.mainApp.unregister()
-                    }
+                    try SMAppService.mainApp.register()
+                    ZSLog("launchAtLogin ON: registered, status=\(status)")
                 } catch {
-                    defaults.set(!newValue, forKey: Keys.launchAtLogin)
+                    let reverted = false
+                    launchAtLogin = reverted
+                    defaults.set(false, forKey: Keys.launchAtLogin)
+                    ZSLog("launchAtLogin ON failed: \(error), status=\(status)")
+                }
+            } else {
+                switch status {
+                case .notRegistered, .notFound:
+                    ZSLog("launchAtLogin OFF: not registered, only persist OFF, status=\(status)")
+                default:
+                    do {
+                        try SMAppService.mainApp.unregister()
+                        ZSLog("launchAtLogin OFF: unregistered, status=\(status)")
+                    } catch {
+                        let reverted = true
+                        launchAtLogin = reverted
+                        defaults.set(true, forKey: Keys.launchAtLogin)
+                        ZSLog("launchAtLogin OFF failed: \(error), status=\(status)")
+                    }
                 }
             }
         }
@@ -93,21 +120,15 @@ final class SettingsStore: ObservableObject {
 
     // MARK: - 保存
 
-    var saveDirectory: String {
-        get {
-            let stored = defaults.string(forKey: Keys.saveDirectory)
-                ?? Self.defaultSaveDirectory
-            return stored
-        }
-        set {
-            defaults.set(newValue, forKey: Keys.saveDirectory)
+    @Published var saveDirectory: String {
+        didSet {
+            defaults.set(saveDirectory, forKey: Keys.saveDirectory)
             ensureDefaultDirectoryExists()
         }
     }
 
-    var askSaveLocation: Bool {
-        get { defaults.bool(forKey: Keys.askSaveLocation) }
-        set { defaults.set(newValue, forKey: Keys.askSaveLocation) }
+    @Published var askSaveLocation: Bool {
+        didSet { defaults.set(askSaveLocation, forKey: Keys.askSaveLocation) }
     }
 
     // MARK: - 最近保存
