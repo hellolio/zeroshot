@@ -23,7 +23,9 @@ struct ShortcutRecorderView: View {
                     .foregroundStyle(isRecording ? Color.accentColor : (store.shortcut.isValid ? .primary : Color(nsColor: .secondaryLabelColor)))
                     .padding(.vertical, 5)
                     .padding(.horizontal, 12)
+                    .allowsHitTesting(false)
             }
+            .contentShape(Rectangle())
             .frame(minWidth: 150)
             .fixedSize()
             .onTapGesture {
@@ -58,9 +60,12 @@ struct ShortcutRecorderView: View {
     }
 
     private func startListening() {
+        // 录制期间暂停全局热键，避免按相同组合键触发截图
+        GlobalHotkeyManager.shared.suspend()
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [self] event in
             guard isRecording else { return event }
             if event.keyCode == 53 { // Esc 取消录制
+                stopRecording()
                 return nil
             }
             let modifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
@@ -87,5 +92,7 @@ struct ShortcutRecorderView: View {
             eventMonitor = nil
         }
         isRecording = false
+        // 恢复全局热键（录制中暂停了；此时 shortcut 已更新或保持原值，均以当前值重新注册）
+        GlobalHotkeyManager.shared.resume()
     }
 }

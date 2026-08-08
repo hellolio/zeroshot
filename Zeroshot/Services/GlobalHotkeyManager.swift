@@ -63,6 +63,16 @@ final class GlobalHotkeyManager {
         register(shortcut)
     }
 
+    /// 录制新快捷键期间暂停全局热键，避免按下相同组合键时触发截图
+    func suspend() {
+        unregister()
+    }
+
+    /// 录制结束（成功/取消/窗口关闭）后恢复全局热键
+    func resume() {
+        reinstall(shortcut: SettingsStore.shared.shortcut)
+    }
+
     private func carbonModifiers(for flags: NSEvent.ModifierFlags) -> UInt32 {
         var result: UInt32 = 0
         if flags.contains(.command) { result |= UInt32(cmdKey) }
