@@ -481,11 +481,11 @@ case .select:
         var line = Path()
         line.move(to: anchor)
         line.addLine(to: toView(bubble.lineEnd))
-        context.stroke(line, with: .color(bubbleAccent.opacity(0.9)), style: StrokeStyle(lineWidth: 1.5))
+        context.stroke(line, with: .color(bubbleAccent), style: StrokeStyle(lineWidth: 1.5))
 
         // 白色文本框（黑色文字）
         let bodyPath = RoundedRectangle(cornerRadius: 6).path(in: box)
-        context.fill(bodyPath, with: .color(Color.white.opacity(0.92)))
+        context.fill(bodyPath, with: .color(Color.white))
         context.stroke(bodyPath,
                        with: .color(isActive ? .accentColor : bubbleBorder),
                        style: StrokeStyle(lineWidth: isActive ? 1.6 : 1,
@@ -810,12 +810,12 @@ private func positionColorPanel(_ panel: NSColorPanel) {
         line.move(to: anchor)
         line.line(to: bubble.lineEnd)
         line.lineWidth = 1.5
-        NSColor.white.withAlphaComponent(0.9).setStroke()
+        NSColor.white.setStroke()
         line.stroke()
 
         // 白色文本框（黑色文字）
         let body = NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6)
-        NSColor.white.withAlphaComponent(0.92).setFill()
+        NSColor.white.setFill()
         body.fill()
         NSColor.black.withAlphaComponent(0.55).setStroke()
         body.lineWidth = 1
@@ -851,7 +851,6 @@ private func positionColorPanel(_ panel: NSColorPanel) {
             } catch {
                 presentAlert(title: "保存失败", message: error.localizedDescription)
             }
-            onClose()
         }
 
         if settings.askSaveLocation {
@@ -884,7 +883,6 @@ private func positionColorPanel(_ panel: NSColorPanel) {
         } else {
             pb.writeObjects([image])
         }
-        onClose()
     }
 
     static func fileName() -> String {
