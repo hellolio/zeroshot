@@ -81,6 +81,9 @@ final class CaptureCoordinator: ObservableObject {
     // MARK: - 覆盖层
 
     private func createOverlayWindows() {
+        // 首次截图时 app 可能尚未激活，键盘事件不会投递给遮罩的 key 窗口，
+        // 导致按 Esc 无法取消选区。进入选区前先激活本应用。
+        NSApp.activate(ignoringOtherApps: true)
         let screens = NSScreen.screens
         ZSLog("creating overlay for \(screens.count) screen(s)")
         overlayWindows = screens.map { screen in
