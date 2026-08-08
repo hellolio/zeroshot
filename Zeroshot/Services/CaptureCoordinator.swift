@@ -1,0 +1,227 @@
+import AppKit
+import SwiftUI
+
+/// SLK：串联「选区 → 捕获 → 打开编辑器」的协调器
+final class CaptureCoordinator: ObservableObject {
+    static let shared = CaptureCoordinator()
+
+    /// 当前是否正在截图会话中
+    private(set) var isActive = false
+
+    private var overlayWindows: [CaptureOverlayWindow] = []
+    private var editorController: NSWindowController?
+    private var permissionAlert: NSAlert?
+    private var isShowingAlert = false
+
+    private init() {}
+
+    // MARK: - 入口
+
+    /// 开始一次截图（由热键 / 菜单触发）
+    func startCapture() {
+        ZSLog("startCapture called, preflight granted = \(ScreenRecordingPermission.isGranted)")
+        guard !isActive else { ZSLog("already active, ignore"); return }
+        isActive = true
+        Task {
+            // 用真实权限探测：与截图使用同一 ScreenCaptureKit API
+            let granted = await ScreenRecordingPermission.hasScreenCaptureAccess()
+            await MainActor.run {
+                guard granted else {
+                    ZSLog("real permission check failed -> guide")
+                    self.isActive = false
+                    self.presentPermissionGuide()
+                    return
+                }
+                ZSLog("real permission OK -> create overlays")
+                // 进入截图的那一刻就把光标切成十字线
+                NSCursor.crosshair.set()
+                self.createOverlayWindows()
+            }
+        }
+    }
+
+    // MARK: - 权限引导
+
+    private func presentPermissionGuide() {
+        // 防止重复弹窗（例如热键与菜单同时触发）
+        guard !isShowingAlert else { return }
+        isShowingAlert = true
+        ZSLog("presentPermissionGuide")
+        let alert = NSAlert()
+        alert.messageText = "需要「屏幕录制」权限"
+        alert.informativeText = """
+        zeroshot 需要屏幕录制权限来截取屏幕内容。
+
+        1. 点击下方「打开系统设置」
+        2. 在「隐私与安全性 → 屏幕录制」中，为 Zeroshot 打开开关
+        3. 回到应用后点击「我已授权，重新检测」
+
+        注意：应用每次重新编译后系统会把它当作新的程序，需要重新授权一次。
+        """
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "打开系统设置")
+        alert.addButton(withTitle: "我已授权，重新检测")
+        permissionAlert = alert
+        NSApp.activate(ignoringOtherApps: true)
+        let alertWindow = alert.window
+        alertWindow.level = .floating
+        alertWindow.orderFrontRegardless()
+        let resp = alert.runModal()
+        isShowingAlert = false
+        if resp == .alertFirstButtonReturn {
+            ScreenRecordingPermission.requestAuthorization()
+        }
+        permissionAlert = nil
+        // 授权后重新检测，直接进入下一步，无需重启应用
+        if resp == .alertSecondButtonReturn {
+            startCapture()
+        }
+    }
+
+    // MARK: - 覆盖层
+
+    private func createOverlayWindows() {
+        let screens = NSScreen.screens
+        ZSLog("creating overlay for \(screens.count) screen(s)")
+        overlayWindows = screens.map { screen in
+            ZSLog("overlay window for screen \(screen.frame)")
+            let window = CaptureOverlayWindow(screen: screen) { [weak self] rect in
+                ZSLog("selection completed: \(rect) on screen frame \(screen.frame)")
+                self?.completeSelection(on: screen, rect: rect)
+            } onCancel: { [weak self] in
+                ZSLog("selection cancelled")
+                self?.cancelSelection()
+            }
+            window.orderFrontRegardless()
+            return window
+        }
+
+        // 把光标放置到最前面一个屏幕。若鼠标存在的屏幕优先。
+        if let mouseScreen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }),
+           let win = overlayWindows.first(where: { $0.screen?.frame == mouseScreen.frame }) {
+            win.makeKey()
+        }
+    }
+
+    private func completeSelection(on screen: NSScreen, rect: CGRect) {
+        guard let window = overlayWindow(for: screen) else { return }
+        window.orderOut(nil)
+        isActive = false
+
+        Task {
+            ZSLog("capturing screen=\(screen.frame) rect=\(rect)")
+            guard let image = await ScreenCapture.capture(screen: screen, rect: rect) else {
+                ZSLog("capture returned nil")
+                await MainActor.run { self.presentCaptureError() }
+                return
+            }
+            ZSLog("capture OK size=\(image.size)")
+            await MainActor.run {
+                self.openEditor(image: image)
+                self.overlayWindows.removeAll()
+            }
+        }
+    }
+
+    private func cancelSelection() {
+        overlayWindows.forEach { $0.close() }
+        overlayWindows.removeAll()
+        isActive = false
+    }
+
+    private func overlayWindow(for screen: NSScreen) -> CaptureOverlayWindow? {
+        overlayWindows.first { $0.screen === screen }
+    }
+
+    private func presentCaptureError() {
+        let alert = NSAlert()
+        alert.messageText = "截图失败"
+        alert.informativeText = "无法捕获所选区域，请检查屏幕录制权限后重试。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "好的")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
+    // MARK: - 编辑器
+
+    /// 调试专用：直接打开编辑页（绕过取景权限），用一张合成网格图测试标注
+    func openEditorForDebug() {
+        ZSLog("openEditorForDebug: synthetic 800x500 image")
+        let size = NSSize(width: 800, height: 500)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor.white.setFill()
+        NSRect(origin: .zero, size: size).fill()
+        NSColor.lightGray.withAlphaComponent(0.5).setStroke()
+        for x in stride(from: CGFloat(0), through: size.width, by: 50) {
+            NSBezierPath(rect: NSRect(x: x, y: 0, width: 1, height: size.height)).stroke()
+        }
+        for y in stride(from: CGFloat(0), through: size.height, by: 50) {
+            NSBezierPath(rect: NSRect(x: 0, y: y, width: size.width, height: 1)).stroke()
+        }
+        image.unlockFocus()
+        self.openEditor(image: image)
+    }
+
+    private func openEditor(image: NSImage) {
+        if let controller = editorController {
+            controller.close()
+        }
+
+        // 计算真实顶栏（标题栏）高度，让底部工具栏与之保持一致
+        let styleMask: NSWindow.StyleMask = [.titled, .closable, .resizable]
+        let sampleFrame = NSRect(x: 0, y: 0, width: 100, height: 100)
+        let contentRect = NSWindow.contentRect(forFrameRect: sampleFrame, styleMask: styleMask)
+        let titleBarHeight = sampleFrame.height - contentRect.height
+
+        let hosting = NSHostingController(rootView: EditorView(
+            image: image,
+            onClose: {
+                self.editorController?.close()
+                self.editorController = nil
+            },
+            barHeight: titleBarHeight
+        ))
+
+        let window = NSWindow(contentViewController: hosting)
+        window.title = "zeroshot 截图"
+        window.styleMask = styleMask
+        window.isRestorable = false
+
+        // 窗口初始尺寸根据截图自适应：
+        // - 截图较小 → 窗口贴着截图大小（避免大片空白）
+        // - 截图较大 → 缩放到窗口尺寸上限（避免显示不完）
+        let imgSize = image.size
+        let toolbarHeight: CGFloat = 64
+        let maxW: CGFloat = 1100
+        let maxH: CGFloat = 760
+        // 最小宽度需保证底部工具栏所有按钮（撤销/重做/画线/标注/颜色/粗细/下载/复制）完整显示
+        let minW: CGFloat = 560
+        let minH: CGFloat = 300
+
+        var contentW = imgSize.width
+        var contentH = imgSize.height + toolbarHeight
+        let maxScale = min(maxW / max(contentW, 1), maxH / max(contentH, 1))
+        if maxScale < 1 {
+            contentW *= maxScale
+            contentH *= maxScale
+        }
+        contentW = max(minW, min(contentW, maxW))
+        contentH = max(minH, min(contentH, maxH))
+        window.setContentSize(NSSize(width: contentW, height: contentH))
+        window.minSize = NSSize(width: minW, height: minH)
+        window.center()
+        window.isRestorable = false
+
+        let controller = NSWindowController(window: window)
+        controller.showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        // 强制在窗口显示后立即布局渲染，避免首次打开出现空白
+        window.contentView?.needsLayout = true
+        window.contentView?.needsDisplay = true
+        window.displayIfNeeded()
+        editorController = controller
+    }
+}

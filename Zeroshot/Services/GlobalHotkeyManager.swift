@@ -1,0 +1,117 @@
+import Carbon
+import AppKit
+import Combine
+
+/// 全局快捷键管理（Carbon RegisterEventHotKey）
+final class GlobalHotkeyManager {
+    static let shared = GlobalHotkeyManager()
+
+    private var hotKeyRef: EventHotKeyRef?
+    private var eventHandlerRef: EventHandlerRef?
+    private let hotKeyID = EventHotKeyID(signature: "ZRST".fourCharCodeValue, id: 1)
+
+    /// 外部通知：应从 SettingsStore 的 didSet 中触发
+    static let didChangeNotification = Notification.Name("zeroshot.shortcutDidChange")
+
+    private var onTrigger: (() -> Void)?
+
+    private init() {
+        installEventHandler()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleShortcutDidChange(_:)),
+            name: Self.didChangeNotification,
+            object: nil
+        )
+    }
+
+    func setTriggerHandler(_ handler: @escaping () -> Void) {
+        onTrigger = handler
+    }
+
+    // MARK: - 注册
+
+    @discardableResult
+    func register(_ shortcut: ShortcutKey) -> Bool {
+        unregister()
+        guard shortcut.isValid else { return false }
+
+        var hotKeyRefOut: EventHotKeyRef?
+        let modifiers = carbonModifiers(for: shortcut.modifiers)
+        let status = RegisterEventHotKey(
+            UInt32(shortcut.keyCode),
+            modifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &hotKeyRefOut
+        )
+        if status == noErr {
+            hotKeyRef = hotKeyRefOut
+            return true
+        }
+        return false
+    }
+
+    func unregister() {
+        guard let ref = hotKeyRef else { return }
+        UnregisterEventHotKey(ref)
+        hotKeyRef = nil
+    }
+
+    func reinstall(shortcut: ShortcutKey) {
+        register(shortcut)
+    }
+
+    private func carbonModifiers(for flags: NSEvent.ModifierFlags) -> UInt32 {
+        var result: UInt32 = 0
+        if flags.contains(.command) { result |= UInt32(cmdKey) }
+        if flags.contains(.shift) { result |= UInt32(shiftKey) }
+        if flags.contains(.option) { result |= UInt32(optionKey) }
+        if flags.contains(.control) { result |= UInt32(controlKey) }
+        return result
+    }
+
+    // MARK: - 事件处理器
+
+    private func installEventHandler() {
+        var eventSpec = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed)
+        )
+        let handler: EventHandlerUPP = { _, _, userData in
+            guard let userData else { return noErr }
+            let manager = Unmanaged<GlobalHotkeyManager>.fromOpaque(userData).takeUnretainedValue()
+            DispatchQueue.main.async {
+                manager.onTrigger?()
+            }
+            return noErr
+        }
+        InstallEventHandler(
+            GetApplicationEventTarget(),
+            handler,
+            1,
+            &eventSpec,
+            Unmanaged.passUnretained(self).toOpaque(),
+            &eventHandlerRef
+        )
+    }
+
+    @objc private func handleShortcutDidChange(_ notification: Notification) {
+        guard let shortcut = notification.userInfo?["shortcut"] as? ShortcutKey else {
+            reinstall(shortcut: SettingsStore.shared.shortcut)
+            return
+        }
+        register(shortcut)
+    }
+}
+
+extension String {
+    var fourCharCodeValue: OSType {
+        var result: OSType = 0
+        for char in utf8 {
+            result = (result << 8) | OSType(char)
+        }
+        return result
+    }
+}
