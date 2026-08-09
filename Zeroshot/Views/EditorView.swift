@@ -13,6 +13,9 @@ struct EditorView: View {
 
     @State private var activeTool: ToolState = .pencil
     @State private var strokeWidth: CGFloat = 3
+    @State private var showThicknessPanel = false
+    @State private var hoveredWidth: CGFloat?
+    @State private var showColorPanel = false
     @State private var tempStroke: StrokeElement?
     @State private var editingBubbleID: UUID?
     @State private var bubbleText: String = ""
@@ -44,14 +47,9 @@ struct EditorView: View {
     private static let minBubbleHeight: CGFloat = 34
     private static let maxBubbleHeight: CGFloat = 320
 
-    /// 当前画笔颜色，由系统调色板驱动（默认红色）
-    private var strokeColor: Color {
-        get { Color(nsColor: colorPanelModel.color) }
-        set { colorPanelModel.color = newValue.nsColor }
-    }
-
-    /// 用于把系统调色板的选择回调到 SwiftUI 状态
-    @StateObject private var colorPanelModel = ColorPanelModel()
+    /// 当前画笔颜色（默认红色）
+    @State private var penColor: Color = .red
+    private var strokeColor: Color { penColor }
 
     // 渲染几何
     @State private var displayRect: CGRect = .zero
@@ -114,7 +112,7 @@ struct EditorView: View {
                 self.activeTool = .pencil
                 return nil
             case (17, []):                   // T 标注
-                self.activeTool = .bubble
+                self.activeTool = self.activeTool == .bubble ? .select : .bubble
                 return nil
             case (51, []), (117, []):              // Backspace / Delete 删除选中标注
                 if let sel = self.selectedBubbleID {
@@ -602,8 +600,6 @@ case .select:
 
     // MARK: - 工具栏
 
-    @State private var showBrushPanel = false
-
     private var toolbar: some View {
         HStack(spacing: 10) {
             HStack(spacing: 2) {
@@ -619,19 +615,33 @@ case .select:
 
             Divider().frame(height: 14)
 
-            toolButton(systemImage: "pencil", tip: "画线 (L)", highlighted: activeTool == .pencil || showBrushPanel) {
-                commitAnyPendingEdit()
-                activeTool = .pencil
-                showBrushPanel = true
+            HStack(spacing: 2) {
+                toolButton(systemImage: "pencil", tip: "画线 (L)", highlighted: activeTool == .pencil) {
+                    commitAnyPendingEdit()
+                    activeTool = activeTool == .pencil ? .select : .pencil
+                }
+                Divider().frame(height: 14)
+                colorSquareButton
+                    .disabled(activeTool != .pencil)
+                    .opacity(activeTool == .pencil ? 1 : 0.35)
+                    .padding(.trailing, 4)
+                thicknessMenu
+                    .disabled(activeTool != .pencil)
+                    .opacity(activeTool == .pencil ? 1 : 0.35)
             }
-            .popover(isPresented: $showBrushPanel, arrowEdge: .top) {
-                brushPanel
-            }
+            .padding(2)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.secondary.opacity(0.1))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+            )
 
             toolButton(systemImage: "text.bubble.fill", tip: "标注 (T)", highlighted: activeTool == .bubble) {
                 commitAnyPendingEdit()
-                activeTool = .bubble
-                showBrushPanel = false
+                activeTool = activeTool == .bubble ? .select : .bubble
             }
 
             Spacer(minLength: 8)
@@ -658,90 +668,107 @@ case .select:
         )
     }
 
-    /// 画笔配置面板：颜色（方形圆角）+ 粗细（三条线）
-    private var brushPanel: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
-                Text("颜色")
-                    .font(.system(size: 12))
-                    .frame(width: 34, alignment: .leading)
-                colorSquareButton
-            }
-            Divider()
-            HStack(spacing: 10) {
-                Text("粗细")
-                    .font(.system(size: 12))
-                    .frame(width: 34, alignment: .leading)
-                HStack(spacing: 12) {
-                    thicknessLineButton(width: 2)
-                    thicknessLineButton(width: 5)
-                    thicknessLineButton(width: 9)
-                }
-            }
-        }
-        .padding(14)
-    }
-
-    /// 方形圆角颜色按钮
-    private var colorSquareButton: some View {
+    /// 粗细下拉框：显示当前粗细线条，点击弹出 细/中/粗 三个线条选项
+    private var thicknessMenu: some View {
         Button {
-            openColorPanel()
+            showThicknessPanel = true
         } label: {
-            RoundedRectangle(cornerRadius: 4)
-                .fill(strokeColor)
-                .frame(width: 18, height: 18)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 4)
-                        .stroke(Color.black.opacity(0.2), lineWidth: 0.5)
-                )
+            HStack(spacing: 3) {
+                Capsule()
+                    .fill(strokeColor)
+                    .frame(width: 16, height: strokeWidth)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundColor(.secondary)
+            }
+            .frame(minWidth: 40, minHeight: 24, maxHeight: 24)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.secondary.opacity(0.12))
+            )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .popover(isPresented: $showThicknessPanel, arrowEdge: .bottom) {
+            VStack(spacing: 4) {
+                ForEach([CGFloat(2), 5, 9], id: \.self) { width in
+                    Button {
+                        strokeWidth = width
+                        showThicknessPanel = false
+                    } label: {
+                        RoundedRectangle(cornerRadius: width / 2)
+                            .fill(strokeWidth == width ? strokeColor : Color(white: 0.78))
+                            .frame(width: 60, height: width)
+                            .frame(width: 80, height: 24, alignment: .center)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(strokeWidth == width ? Color.accentColor.opacity(0.3) : (hoveredWidth == width ? Color.secondary.opacity(0.18) : Color.clear))
+                            )
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { hovering in
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            hoveredWidth = hovering ? width : nil
+                        }
+                    }
+                }
+            }
+            .padding(6)
+            .background(Color(nsColor: .windowBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .help("粗细")
+    }
+
+    /// 预设画笔颜色
+    private let presetColors: [Color] = [
+        .red, .orange, .yellow, .green, .blue, .purple,
+        .pink, .gray, .black, .white,
+    ]
+
+    /// 画笔颜色选择（圆形按钮，点击以气泡方式弹出预设色板；选择颜色或点击空白处自动关闭）
+    private var colorSquareButton: some View {
+        Button {
+            showColorPanel = true
+        } label: {
+            Circle()
+                .fill(strokeColor)
+                .frame(width: 16, height: 16)
+                .overlay(
+                    Circle()
+                        .stroke(Color.black.opacity(0.25), lineWidth: 0.75)
+                )
+                .padding(2)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showColorPanel, arrowEdge: .bottom) {
+            HStack(spacing: 6) {
+                ForEach(Array(presetColors.enumerated()), id: \.offset) { _, color in
+                    Button {
+                        penColor = color
+                        showColorPanel = false
+                    } label: {
+                        Circle()
+                            .fill(color)
+                            .frame(width: 18, height: 18)
+                            .overlay(
+                                Circle()
+                                    .stroke(penColor == color ? Color.accentColor : Color.black.opacity(0.15),
+                                            lineWidth: penColor == color ? 2 : 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(8)
+            .background(Color(nsColor: .windowBackgroundColor))
+        }
         .help("画笔颜色")
     }
 
-    /// 粗细线条按钮：用线宽表示 细/中/粗。点击范围固定大尺寸，便于点选
-    private func thicknessLineButton(width: CGFloat) -> some View {
-        Button {
-            strokeWidth = width
-        } label: {
-            HStack {
-                Spacer(minLength: 0)
-                Capsule()
-                    .fill(self.strokeWidth == width ? strokeColor : Color.secondary)
-                    .frame(width: 26, height: width)
-                Spacer(minLength: 0)
-            }
-            .frame(minWidth: 44, minHeight: 26)
-            .contentShape(Rectangle())
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(self.strokeWidth == width ? Color.accentColor.opacity(0.15) : Color.clear)
-            )
-        }
-        .buttonStyle(.plain)
-        .help("粗细 \(Int(width))")
-    }
-
-    private func openColorPanel() {
-        let panel = NSColorPanel.shared
-        panel.color = strokeColor.nsColor
-        panel.showsAlpha = false
-        colorPanelModel.color = strokeColor.nsColor
-        panel.isContinuous = true
-        panel.setTarget(colorPanelModel)
-        panel.setAction(#selector(ColorPanelModel.colorChanged(_:)))
-
-        // 把调色板定位到颜色按钮右上方（点击时鼠标即在按钮上）
-        positionColorPanel(panel)
-        panel.makeKeyAndOrderFront(nil)
-    }
-
-private func positionColorPanel(_ panel: NSColorPanel) {
-        let mouse = NSEvent.mouseLocation  // 屏幕坐标（左下原点，与 setFrameOrigin 一致）
-        panel.setFrameOrigin(NSPoint(x: mouse.x + 16, y: mouse.y + 8))
-    }
-
-    private func commitAnyPendingEdit() {
+        private func commitAnyPendingEdit() {
         if let bubble = editingBubble {
             commitBubbleEdit(bubble)
         }
@@ -913,17 +940,6 @@ extension NSImage {
 
 extension Color {
     var nsColor: NSColor { NSColor(self) }
-}
-
-// MARK: - 系统调色板回调
-
-final class ColorPanelModel: NSObject, ObservableObject {
-    @Published var color: NSColor = .red
-
-    @objc func colorChanged(_ sender: NSColorPanel?) {
-        guard let c = sender?.color else { return }
-        color = c
-    }
 }
 
 // MARK: - 气泡文字编辑（NSTextView 包装）
