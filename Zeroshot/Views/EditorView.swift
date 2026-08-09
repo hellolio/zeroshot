@@ -8,7 +8,7 @@ struct EditorView: View {
     let onClose: () -> Void
 
     enum ToolState: Equatable {
-        case select, pencil, bubble
+        case select, pencil, bubble, rect, ellipse, mosaic
     }
 
     @State private var activeTool: ToolState = .pencil
@@ -20,22 +20,30 @@ struct EditorView: View {
     @State private var editingBubbleID: UUID?
     @State private var bubbleText: String = ""
     @State private var hoveredBubbleID: UUID?
-    @State private var selectedBubbleID: UUID?
+    @State private var selectedElementID: UUID?
     @State private var lastTapTime: Date = .distantPast
-    @State private var lastTapBubbleID: UUID?
+    @State private var lastTapElementID: UUID?
 
-    /// 标注拖动状态
-    private enum BubbleDragMode { case move, resize, anchor }
+    /// 矩形/圆框临时绘制
+    @State private var tempShape: ShapeElement?
+    @State private var shapeDragStart: CGPoint?
+
+    /// 马赛克临时涂抹
+    @State private var tempMosaic: MosaicElement?
+    @State private var mosaicRadius: CGFloat = 18
+
+    /// 元素拖动状态（气泡 / 形状）
+    private enum ElementDragMode { case move, resize, anchor }
     private enum Corner { case tl, tr, bl, br }
-    private struct BubbleDragState {
+    private struct ElementDragState {
         let id: UUID
-        let mode: BubbleDragMode
+        let mode: ElementDragMode
         let corner: Corner?
         let cursorStart: CGPoint  // 拖动起始点（图像坐标）
         let startAnchor: CGPoint
         let startBox: CGRect
     }
-    @State private var bubbleDrag: BubbleDragState?
+    @State private var elementDrag: ElementDragState?
 
     /// 标注固定配色：白色，不受画笔颜色影响
     private let bubbleAccent = Color.white
@@ -70,7 +78,7 @@ struct EditorView: View {
             Divider()
             toolbar
         }
-        .frame(minWidth: 560, minHeight: 300)
+        .frame(minWidth: 720, minHeight: 300)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
             installKeyboardMonitor()
@@ -115,8 +123,8 @@ struct EditorView: View {
                 self.activeTool = self.activeTool == .bubble ? .select : .bubble
                 return nil
             case (51, []), (117, []):              // Backspace / Delete 删除选中标注
-                if let sel = self.selectedBubbleID {
-                    self.deleteSelectedBubble()
+                if self.selectedElementID != nil {
+                    self.deleteSelectedElement()
                     return nil
                 }
                 return event
@@ -143,7 +151,7 @@ struct EditorView: View {
                     // 等比适配画布居中显示
                     let fit = fitRect(for: size)
                     context.draw(Image(nsImage: doc.image), in: fit)
-                    drawStrokesAndBubbles(context: context, size: size)
+                    drawElements(context: context, size: size)
                 }
                 .gesture(canvasGesture)
                 .onContinuousHover { phase in
@@ -169,17 +177,29 @@ struct EditorView: View {
         }
     }
 
-    private func drawStrokesAndBubbles(context: GraphicsContext, size: CGSize) {
+    private func drawElements(context: GraphicsContext, size: CGSize) {
         var strokes: [StrokeElement] = []
         if let temp = tempStroke { strokes.append(temp) }
         for case .stroke(let s) in doc.elements { strokes.append(s) }
         for stroke in strokes { drawStroke(stroke, context: context) }
 
+        for case .shape(let s) in doc.elements {
+            drawShape(s, context: context, selected: s.id == selectedElementID)
+        }
+        if let temp = tempShape {
+            drawShape(temp, context: context, selected: false)
+        }
+
         for case .bubble(let b) in doc.elements {
             drawBubble(b, context: context, showText: b.id != editingBubbleID,
                        hovered: b.id == hoveredBubbleID,
-                       selected: b.id == selectedBubbleID)
+                       selected: b.id == selectedElementID)
         }
+
+        var mosaics: [MosaicElement] = []
+        if let temp = tempMosaic { mosaics.append(temp) }
+        for case .mosaic(let m) in doc.elements { mosaics.append(m) }
+        for mosaic in mosaics { drawMosaic(mosaic, context: context) }
     }
 
     /// 图片在当前画布中等比居中后的绘制矩形
@@ -247,11 +267,32 @@ struct EditorView: View {
                     }
                 case .bubble:
                     break
-                case .select:
-                    if bubbleDrag == nil {
-                        startBubbleDragIfNeeded(at: value.location)
+                case .rect, .ellipse:
+                    if shapeDragStart == nil {
+                        shapeDragStart = imgPoint
                     }
-                    applyBubbleDrag(to: value.location)
+                    if let start = shapeDragStart {
+                        tempShape = ShapeElement(style: activeTool == .rect ? .rect : .ellipse,
+                                                 box: normalizedRect(from: start, to: imgPoint),
+                                                 color: strokeColor,
+                                                 lineWidth: strokeWidth)
+                    }
+                case .mosaic:
+                    if var mosaic = tempMosaic {
+                        if let last = mosaic.points.last,
+                           hypot(imgPoint.x - last.x, imgPoint.y - last.y) < mosaic.radius * 0.4 {
+                            return
+                        }
+                        mosaic.points.append(imgPoint)
+                        tempMosaic = mosaic
+                    } else {
+                        tempMosaic = MosaicElement(points: [imgPoint], radius: mosaicRadius)
+                    }
+                case .select:
+                    if elementDrag == nil {
+                        startElementDragIfNeeded(at: value.location)
+                    }
+                    applyElementDrag(to: value.location)
                 }
             }
             .onEnded { value in
@@ -276,27 +317,49 @@ struct EditorView: View {
                     doc.elements.append(.bubble(bubble))
                     bubbleText = ""
                     editingBubbleID = bubble.id
-                    selectedBubbleID = bubble.id
+                    selectedElementID = bubble.id
                     activeTool = .select
-case .select:
+                case .rect, .ellipse:
+                    if let temp = tempShape, temp.box.width > 2, temp.box.height > 2 {
+                        doc.snapshotBeforeChange()
+                        doc.elements.append(.shape(temp))
+                        selectedElementID = temp.id
+                    }
+                    tempShape = nil
+                    shapeDragStart = nil
+                    activeTool = .select
+                case .mosaic:
+                    if let temp = tempMosaic, temp.points.count > 0 {
+                        doc.snapshotBeforeChange()
+                        doc.elements.append(.mosaic(temp))
+                    }
+                    tempMosaic = nil
+                case .select:
                     let tap = abs(value.translation.width) < 4 && abs(value.translation.height) < 4
                     if tap {
-                        if let laterHit = bubble(at: value.location), let selID = selectedBubbleID, selID == laterHit.0 {
-                            // 双击打开文字编辑
-                            let isDouble = Date().timeIntervalSince(lastTapTime) < 0.35 && lastTapBubbleID == selID
-                            lastTapTime = Date()
-                            lastTapBubbleID = selID
-                            if isDouble {
-                                startTextEdit(for: selID)
+                        if let laterHit = element(at: value.location) {
+                            let selID = laterHit.0
+                            if selID == selectedElementID {
+                                // 双击气泡打开文字编辑
+                                let isDouble = Date().timeIntervalSince(lastTapTime) < 0.35 && lastTapElementID == selID
+                                lastTapTime = Date()
+                                lastTapElementID = selID
+                                if isDouble, case .bubble = laterHit.1 {
+                                    startTextEdit(for: selID)
+                                }
+                            } else {
+                                lastTapTime = Date()
+                                lastTapElementID = selID
+                                selectedElementID = selID
                             }
                         } else {
                             // 点到空白处：结束文字编辑
                             commitAnyPendingEdit()
-                            selectedBubbleID = nil
-                            lastTapBubbleID = nil
+                            selectedElementID = nil
+                            lastTapElementID = nil
                         }
                     }
-                    endBubbleDrag()
+                    endElementDrag()
                 }
             }
     }
@@ -310,53 +373,85 @@ case .select:
         return CGRect(x: anchor.x + 10, y: anchor.y - h - 12, width: w, height: h)
     }
 
-    private func bubble(at location: CGPoint) -> (UUID, BubbleElement)? {
+    private func element(at location: CGPoint) -> (UUID, CanvasElement)? {
         for case .bubble(let b) in doc.elements {
-            if bubbleHitRect(b).contains(location) { return (b.id, b) }
+            if bubbleHitRect(b).contains(location) { return (b.id, .bubble(b)) }
+        }
+        for case .shape(let s) in doc.elements {
+            if shapeHitRect(s).contains(location) { return (s.id, .shape(s)) }
         }
         return nil
     }
 
-    /// 命中测试：优先缩放控点 → 锚点 → 文本框，开始拖动
-    private func startBubbleDragIfNeeded(at location: CGPoint) {
+    private func shapeHitRect(_ shape: ShapeElement) -> CGRect {
+        toViewRect(shape.box).insetBy(dx: -6, dy: -6)
+    }
+
+    /// 归一化矩形：任意拖动方向都产生正的宽高
+    private func normalizedRect(from a: CGPoint, to b: CGPoint) -> CGRect {
+        CGRect(x: min(a.x, b.x), y: min(a.y, b.y),
+               width: abs(b.x - a.x), height: abs(b.y - a.y))
+    }
+
+    /// 命中测试：优先缩放控点 → 锚点 → 主体，开始拖动
+    private func startElementDragIfNeeded(at location: CGPoint) {
         // 若正处于某个标注的文字编辑中，先提交关闭覆盖层，避免挡住拖动
         commitAnyPendingEdit()
 
-        // 1) 当前所有标注的四个角缩放控点
-        for case .bubble(let b) in doc.elements {
-            let viewBox = toViewRect(b.box)
+        // 1) 所有标注的四个角缩放控点（气泡 + 形状）
+        for element in doc.elements {
+            let box: CGRect
+            switch element {
+            case .bubble(let b): box = b.box
+            case .shape(let s): box = s.box
+            case .stroke, .mosaic: continue
+            }
+            let viewBox = toViewRect(box)
             for corner in [Corner.tl, .tr, .bl, .br] {
                 let handlePos = cornerPoint(viewBox, corner)
                 if CGRect(x: handlePos.x - 7, y: handlePos.y - 7, width: 14, height: 14).contains(location) {
-                    selectedBubbleID = b.id
+                    selectedElementID = element.id
                     doc.snapshotBeforeChange()
-                    bubbleDrag = BubbleDragState(id: b.id, mode: .resize, corner: corner,
-                                                 cursorStart: toImage(location),
-                                                 startAnchor: b.anchor, startBox: b.box)
+                    elementDrag = ElementDragState(id: element.id, mode: .resize, corner: corner,
+                                                   cursorStart: toImage(location),
+                                                   startAnchor: .zero, startBox: box)
                     return
                 }
             }
         }
-        // 2) 锚点
+        // 2) 气泡锚点
         for case .bubble(let b) in doc.elements {
             let anchorView = toView(b.anchor)
             let anchorHit = CGRect(x: anchorView.x - 9, y: anchorView.y - 9, width: 18, height: 18)
             if anchorHit.contains(location) {
-                selectedBubbleID = b.id
+                selectedElementID = b.id
                 doc.snapshotBeforeChange()
-                bubbleDrag = BubbleDragState(id: b.id, mode: .anchor, corner: nil,
-                                             cursorStart: toImage(location),
-                                             startAnchor: b.anchor, startBox: b.box)
+                elementDrag = ElementDragState(id: b.id, mode: .anchor, corner: nil,
+                                               cursorStart: toImage(location),
+                                               startAnchor: b.anchor, startBox: b.box)
                 return
             }
         }
-        // 3) 文本框本体 → 移动
-        guard let (id, b) = bubble(at: location) else { return }
-        selectedBubbleID = id
+        // 3) 主体 → 移动
+        guard let (id, element) = element(at: location) else { return }
+        selectedElementID = id
         doc.snapshotBeforeChange()
-        bubbleDrag = BubbleDragState(id: id, mode: .move, corner: nil,
-                                     cursorStart: toImage(location),
-                                     startAnchor: b.anchor, startBox: b.box)
+        let startBox: CGRect
+        let startAnchor: CGPoint
+        switch element {
+        case .bubble(let b):
+            startBox = b.box
+            startAnchor = b.anchor
+        case .shape(let s):
+            startBox = s.box
+            startAnchor = .zero
+        default:
+            startBox = .zero
+            startAnchor = .zero
+        }
+        elementDrag = ElementDragState(id: id, mode: .move, corner: nil,
+                                       cursorStart: toImage(location),
+                                       startAnchor: startAnchor, startBox: startBox)
     }
 
     private func cornerPoint(_ viewBox: CGRect, _ corner: Corner) -> CGPoint {
@@ -376,28 +471,46 @@ case .select:
         return (id, b)
     }
 
-    private func applyBubbleDrag(to location: CGPoint) {
-        guard let drag = bubbleDrag, let index = doc.elements.firstIndex(where: { $0.id == drag.id }) else { return }
+    private func applyElementDrag(to location: CGPoint) {
+        guard let drag = elementDrag, let index = doc.elements.firstIndex(where: { $0.id == drag.id }) else { return }
         let imgPoint = toImage(location)
         let dx = imgPoint.x - drag.cursorStart.x
         let dy = imgPoint.y - drag.cursorStart.y
-        guard case .bubble(let b) = doc.elements[index] else { return }
 
-        var newAnchor = b.anchor
-        var newBox = b.box
-        switch drag.mode {
-        case .move:
-            newAnchor = CGPoint(x: drag.startAnchor.x + dx, y: drag.startAnchor.y + dy)
-            newBox = drag.startBox.offsetBy(dx: dx, dy: dy)
-        case .anchor:
-            newAnchor = CGPoint(x: drag.startAnchor.x + dx, y: drag.startAnchor.y + dy)
-        case .resize:
-            newBox = resizedBox(startBox: drag.startBox, corner: drag.corner ?? .br,
-                                deltaX: dx, deltaY: dy,
-                                minSize: CGSize(width: 48, height: 24))
+        switch doc.elements[index] {
+        case .bubble(let b):
+            var newAnchor = b.anchor
+            var newBox = b.box
+            switch drag.mode {
+            case .move:
+                newAnchor = CGPoint(x: drag.startAnchor.x + dx, y: drag.startAnchor.y + dy)
+                newBox = drag.startBox.offsetBy(dx: dx, dy: dy)
+            case .anchor:
+                newAnchor = CGPoint(x: drag.startAnchor.x + dx, y: drag.startAnchor.y + dy)
+            case .resize:
+                newBox = resizedBox(startBox: drag.startBox, corner: drag.corner ?? .br,
+                                    deltaX: dx, deltaY: dy,
+                                    minSize: CGSize(width: 48, height: 24))
+            }
+            doc.elements[index] = .bubble(BubbleElement(
+                id: b.id, anchor: newAnchor, box: newBox, text: b.text))
+        case .shape(let s):
+            var newBox = s.box
+            switch drag.mode {
+            case .move:
+                newBox = drag.startBox.offsetBy(dx: dx, dy: dy)
+            case .resize:
+                newBox = resizedBox(startBox: drag.startBox, corner: drag.corner ?? .br,
+                                    deltaX: dx, deltaY: dy,
+                                    minSize: CGSize(width: 8, height: 8))
+            case .anchor:
+                break
+            }
+            doc.elements[index] = .shape(ShapeElement(
+                id: s.id, box: newBox, style: s.style, color: s.color, lineWidth: s.lineWidth))
+        case .stroke, .mosaic:
+            break
         }
-        doc.elements[index] = .bubble(BubbleElement(
-            id: b.id, anchor: newAnchor, box: newBox, text: b.text))
     }
 
     /// 固定对角，按拖动的角调整文本框
@@ -424,16 +537,16 @@ case .select:
         return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
-    private func endBubbleDrag() {
-        bubbleDrag = nil
+    private func endElementDrag() {
+        elementDrag = nil
     }
 
-    /// 删除当前选中的标注
-    private func deleteSelectedBubble() {
-        guard let selID = selectedBubbleID else { return }
+    /// 删除当前选中的标注（气泡 / 形状）
+    private func deleteSelectedElement() {
+        guard let selID = selectedElementID else { return }
         doc.snapshotBeforeChange()
         doc.elements.removeAll { $0.id == selID }
-        selectedBubbleID = nil
+        selectedElementID = nil
         if editingBubbleID == selID { editingBubbleID = nil }
     }
 
@@ -456,6 +569,77 @@ case .select:
         context.stroke(path, with: .color(stroke.color),
                        style: StrokeStyle(lineWidth: stroke.lineWidth * scaleFactor,
                                           lineCap: .round, lineJoin: .round))
+    }
+
+    /// 矩形 / 圆框标注绘制（仅描边、透明填充）
+    private func drawShape(_ shape: ShapeElement, context: GraphicsContext, selected: Bool) {
+        let box = toViewRect(shape.box)
+        let path: Path
+        switch shape.style {
+        case .rect: path = Path(box)
+        case .ellipse: path = Path(ellipseIn: box)
+        }
+        context.stroke(path, with: .color(shape.color),
+                       style: StrokeStyle(lineWidth: shape.lineWidth * scaleFactor,
+                                          lineJoin: .round))
+        if selected {
+            drawSelectionHandles(for: box, context: context)
+        }
+    }
+
+    /// 选中状态的四角缩放控点
+    private func drawSelectionHandles(for box: CGRect, context: GraphicsContext) {
+        for corner in [Corner.tl, .tr, .bl, .br] {
+            let p = cornerPoint(box, corner)
+            let handle = CGRect(x: p.x - 5, y: p.y - 5, width: 10, height: 10)
+            context.fill(Path(ellipseIn: handle), with: .color(.accentColor))
+            context.stroke(Path(ellipseIn: handle), with: .color(.white), lineWidth: 1.2)
+        }
+    }
+
+    /// 马赛克涂抹绘制：在笔划包围盒内马赛克化原图，再裁剪到每个涂抹圆形区域
+    private func drawMosaic(_ mosaic: MosaicElement, context: GraphicsContext) {
+        guard let first = mosaic.points.first else { return }
+        let r = mosaic.radius
+        var minX = first.x, maxX = first.x, minY = first.y, maxY = first.y
+        for p in mosaic.points.dropFirst() {
+            minX = min(minX, p.x); maxX = max(maxX, p.x)
+            minY = min(minY, p.y); maxY = max(maxY, p.y)
+        }
+        let bbox = CGRect(x: minX - r, y: minY - r,
+                          width: maxX - minX + r * 2, height: maxY - minY + r * 2)
+        guard let overlay = Self.pixelatedImage(doc.image, in: bbox, block: max(4, mosaic.radius * 0.5)) else { return }
+
+        var mask = Path()
+        for p in mosaic.points {
+            let vp = toView(p)
+            mask.addEllipse(in: CGRect(x: vp.x - r, y: vp.y - r, width: r * 2, height: r * 2))
+        }
+        let viewBox = toViewRect(bbox)
+        context.drawLayer { layer in
+            layer.clip(to: mask)
+            layer.draw(Image(nsImage: overlay), in: viewBox)
+        }
+    }
+
+    /// 把图像指定区域做马赛克（缩小后最近邻放大），返回同样点位分辨率的叠加图
+    private static func pixelatedImage(_ source: NSImage, in region: CGRect, block: CGFloat) -> NSImage? {
+        guard region.width > 0, region.height > 0, block > 0 else { return nil }
+        let result = NSImage(size: region.size)
+        let smallW = max(1, Int(ceil(region.width / block)))
+        let smallH = max(1, Int(ceil(region.height / block)))
+        let small = NSImage(size: NSSize(width: smallW, height: smallH))
+        small.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .none
+        source.draw(in: NSRect(x: 0, y: 0, width: smallW, height: smallH),
+                    from: region, operation: .copy, fraction: 1)
+        small.unlockFocus()
+        result.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .none
+        small.draw(in: NSRect(origin: .zero, size: result.size),
+                   from: .zero, operation: .copy, fraction: 1)
+        result.unlockFocus()
+        return result
     }
 
     // MARK: - 文字标注
@@ -498,12 +682,7 @@ case .select:
 
         // 选中时显示四周缩放控点
         if selected {
-            for corner in [Corner.tl, .tr, .bl, .br] {
-                let p = cornerPoint(box, corner)
-                let handle = CGRect(x: p.x - 5, y: p.y - 5, width: 10, height: 10)
-                context.fill(Path(ellipseIn: handle), with: .color(.accentColor))
-                context.stroke(Path(ellipseIn: handle), with: .color(.white), lineWidth: 1.2)
-            }
+            drawSelectionHandles(for: box, context: context)
         }
     }
 
@@ -540,7 +719,7 @@ case .select:
         guard let (_, b) = bubbleWith(id: id) else { return }
         bubbleText = b.text
         editingBubbleID = id
-        selectedBubbleID = id
+        selectedElementID = id
     }
 
     private func commitBubbleEdit(_ bubble: BubbleElement) {
@@ -620,14 +799,22 @@ case .select:
                     commitAnyPendingEdit()
                     activeTool = activeTool == .pencil ? .select : .pencil
                 }
+                toolButton(systemImage: "rectangle", tip: "矩形标注", highlighted: activeTool == .rect) {
+                    commitAnyPendingEdit()
+                    activeTool = activeTool == .rect ? .select : .rect
+                }
+                toolButton(systemImage: "circle", tip: "圆框标注", highlighted: activeTool == .ellipse) {
+                    commitAnyPendingEdit()
+                    activeTool = activeTool == .ellipse ? .select : .ellipse
+                }
                 Divider().frame(height: 14)
                 colorSquareButton
-                    .disabled(activeTool != .pencil)
-                    .opacity(activeTool == .pencil ? 1 : 0.35)
+                    .disabled(!drawingPenToolsActive)
+                    .opacity(drawingPenToolsActive ? 1 : 0.35)
                     .padding(.trailing, 4)
                 thicknessMenu
-                    .disabled(activeTool != .pencil)
-                    .opacity(activeTool == .pencil ? 1 : 0.35)
+                    .disabled(!drawingPenToolsActive)
+                    .opacity(drawingPenToolsActive ? 1 : 0.35)
             }
             .padding(2)
             .background(
@@ -643,6 +830,21 @@ case .select:
                 commitAnyPendingEdit()
                 activeTool = activeTool == .bubble ? .select : .bubble
             }
+
+            HStack(alignment: .center, spacing: 4) {
+                mosaicToolButton(radius: 12, cell: 3, diameter: 14, tip: "马赛克 小")
+                mosaicToolButton(radius: 18, cell: 4, diameter: 18, tip: "马赛克 中")
+                mosaicToolButton(radius: 28, cell: 5.6, diameter: 21, tip: "马赛克 大")
+            }
+            .padding(2)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.secondary.opacity(0.1))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+            )
 
             Spacer(minLength: 8)
 
@@ -719,6 +921,36 @@ case .select:
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .help("粗细")
+    }
+
+    /// 马赛克工具按钮：圆形马赛克图标，整体尺寸随 `diameter` 递增体现 小/中/大；点击设置半径并切换工具
+    private func mosaicToolButton(radius: CGFloat, cell: CGFloat, diameter: CGFloat, tip: String) -> some View {
+        let active = activeTool == .mosaic && mosaicRadius == radius
+        return Button {
+            commitAnyPendingEdit()
+            let wasActive = active
+            mosaicRadius = radius
+            activeTool = wasActive ? .select : .mosaic
+        } label: {
+            MosaicGlyph(cell: cell, diameter: diameter,
+                        tint: active ? .accentColor : Color.primary.opacity(0.72))
+                .contentShape(Circle())
+                .background(Circle().fill(active ? Color.accentColor.opacity(0.18) : Color.clear))
+                .overlay(
+                    Circle()
+                        .stroke(active ? Color.accentColor : Color.clear, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .help(tip)
+    }
+
+    /// 是否启用画笔颜色 / 粗细（画笔、矩形、圆框）
+    private var drawingPenToolsActive: Bool {
+        switch activeTool {
+        case .pencil, .rect, .ellipse: return true
+        case .select, .bubble, .mosaic: return false
+        }
     }
 
     /// 预设画笔颜色
@@ -817,6 +1049,18 @@ case .select:
                 path.stroke()
             case .bubble(let b):
                 drawBubbleIntoCanvas(b)
+            case .shape(let s):
+                let path: NSBezierPath
+                switch s.style {
+                case .rect: path = NSBezierPath(rect: s.box)
+                case .ellipse: path = NSBezierPath(ovalIn: s.box)
+                }
+                path.lineWidth = s.lineWidth
+                path.lineJoinStyle = .round
+                s.color.nsColor.setStroke()
+                path.stroke()
+            case .mosaic(let m):
+                drawMosaicIntoCanvas(m)
             }
         }
         canvas.unlockFocus()
@@ -825,9 +1069,7 @@ case .select:
 
     private func drawBubbleIntoCanvas(_ bubble: BubbleElement) {
         let anchor = bubble.anchor
-        let box = bubble.box
-
-        // 锚点圆点
+        let box = bubble.box        // 锚点圆点
         let dot = NSBezierPath(ovalIn: NSRect(x: anchor.x - 3, y: anchor.y - 3, width: 6, height: 6))
         NSColor.white.setFill()
         dot.fill()
@@ -856,6 +1098,29 @@ case .select:
             )
             attributed.draw(in: box.insetBy(dx: 6, dy: 4))
         }
+    }
+
+    private func drawMosaicIntoCanvas(_ mosaic: MosaicElement) {
+        guard let first = mosaic.points.first else { return }
+        let r = mosaic.radius
+        var minX = first.x, maxX = first.x, minY = first.y, maxY = first.y
+        for p in mosaic.points.dropFirst() {
+            minX = min(minX, p.x); maxX = max(maxX, p.x)
+            minY = min(minY, p.y); maxY = max(maxY, p.y)
+        }
+        let bbox = CGRect(x: minX - r, y: minY - r,
+                          width: maxX - minX + r * 2, height: maxY - minY + r * 2)
+        guard let overlay = Self.pixelatedImage(doc.image, in: bbox, block: max(4, mosaic.radius * 0.5)) else { return }
+
+        let clip = NSBezierPath()
+        for p in mosaic.points {
+            clip.appendOval(in: NSRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2))
+        }
+        NSGraphicsContext.saveGraphicsState()
+        clip.addClip()
+        overlay.draw(in: bbox, from: NSRect(origin: .zero, size: overlay.size),
+                     operation: .sourceOver, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     // MARK: - 下载 / 复制
@@ -1002,5 +1267,56 @@ private struct BubbleTextView: NSViewRepresentable {
                 self.parent.text = tv.string
             }
         }
+    }
+}
+
+// MARK: - 马赛克图标（圆形像素块）
+
+/// 自绘马赛克图标：与涂抹一致的正圆形笔刷头像内绘制 n×n 像素格马赛克块，`diameter` 决定整体大小、颗粒细度由 小/中/大 区分
+private struct MosaicGlyph: View {
+    var cell: CGFloat
+    var diameter: CGFloat
+    var tint: Color
+
+    /// 像素格数：小→4×4、中→3×3、大→2×2，体现马赛克颗粒粗细
+    private var dimension: Int {
+        switch cell {
+        case ..<3.5: return 4
+        case ..<4.8: return 3
+        default: return 2
+        }
+    }
+
+    /// 棋盘相间的马赛克像素图案：实色格打底、淡色格填充，营造"像素化"质感
+    private var mask: [[Bool]] {
+        let n = dimension
+        return (0..<n).map { r in
+            (0..<n).map { c in (r + c) % 2 == 0 }
+        }
+    }
+
+    var body: some View {
+        let n = dimension
+        let gap: CGFloat = diameter >= 20 ? 1.5 : (diameter >= 16 ? 1 : 0.8)
+        let inner = diameter - CGFloat(n - 1) * gap
+        let tile = max(1, inner / CGFloat(n))
+        return VStack(spacing: gap) {
+            ForEach(0..<n, id: \.self) { r in
+                HStack(spacing: gap) {
+                    ForEach(0..<n, id: \.self) { c in
+                        RoundedRectangle(cornerRadius: 0.8)
+                            .fill(mask[r][c] ? tint.opacity(0.9) : tint.opacity(0.24))
+                            .frame(width: tile, height: tile)
+                    }
+                }
+            }
+        }
+        .clipShape(Circle())
+        .frame(width: diameter, height: diameter)
+        .background(
+            Circle()
+                .fill(tint.opacity(0.12))
+        )
+        .contentShape(Circle())
     }
 }

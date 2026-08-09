@@ -210,8 +210,8 @@ final class CaptureCoordinator: ObservableObject {
         let toolbarHeight: CGFloat = 64
         let maxW: CGFloat = 1100
         let maxH: CGFloat = 760
-        // 最小宽度需保证底部工具栏所有按钮（撤销/重做/画线/标注/颜色/粗细/下载/复制）完整显示
-        let minW: CGFloat = 560
+        // 最小宽度需保证底部工具栏所有按钮（撤销/重做/画线/标注/矩形/圆框/马赛克/颜色/粗细/下载/复制）完整显示
+        let minW: CGFloat = 720
         let minH: CGFloat = 300
 
         var contentW = imgSize.width

@@ -4,11 +4,15 @@ import SwiftUI
 enum CanvasElement: Identifiable, Equatable {
     case stroke(StrokeElement)
     case bubble(BubbleElement)
+    case shape(ShapeElement)
+    case mosaic(MosaicElement)
 
     var id: UUID {
         switch self {
         case .stroke(let s): return s.id
         case .bubble(let b): return b.id
+        case .shape(let s): return s.id
+        case .mosaic(let m): return m.id
         }
     }
 
@@ -16,6 +20,8 @@ enum CanvasElement: Identifiable, Equatable {
         switch (lhs, rhs) {
         case (.stroke(let a), .stroke(let b)): return a.id == b.id && a.points == b.points && a.color == b.color && a.lineWidth == b.lineWidth
         case (.bubble(let a), .bubble(let b)): return a.id == b.id && a.anchor == b.anchor && a.box == b.box && a.text == b.text
+        case (.shape(let a), .shape(let b)): return a.id == b.id && a.box == b.box && a.style == b.style && a.color == b.color && a.lineWidth == b.lineWidth
+        case (.mosaic(let a), .mosaic(let b)): return a.id == b.id && a.points == b.points && a.radius == b.radius
         default: return false
         }
     }
@@ -52,6 +58,56 @@ struct BubbleElement: Identifiable, Equatable {
     /// 文本框在锚点右上方时的底部中心点（引线连接处）
     var lineEnd: CGPoint {
         CGPoint(x: box.midX, y: box.maxY)
+    }
+}
+
+/// 矩形 / 圆框标注样式
+enum ShapeStyle: String, Equatable {
+    case rect
+    case ellipse
+}
+
+/// 矩形 / 圆框标注：仅描边、中间透明，颜色线宽跟随画笔；位置和大小都可在编辑时调整
+struct ShapeElement: Identifiable, Equatable {
+    let id: UUID
+    var box: CGRect        // 图像坐标
+    var style: ShapeStyle
+    var color: Color
+    var lineWidth: CGFloat
+
+    init(style: ShapeStyle, box: CGRect, color: Color, lineWidth: CGFloat) {
+        self.id = UUID()
+        self.style = style
+        self.box = box
+        self.color = color
+        self.lineWidth = lineWidth
+    }
+
+    init(id: UUID, box: CGRect, style: ShapeStyle, color: Color, lineWidth: CGFloat) {
+        self.id = id
+        self.box = box
+        self.style = style
+        self.color = color
+        self.lineWidth = lineWidth
+    }
+}
+
+/// 马赛克涂抹笔划：一系列涂抹中心点 + 涂抹半径（图像坐标）
+struct MosaicElement: Identifiable, Equatable {
+    let id: UUID
+    var points: [CGPoint]
+    var radius: CGFloat
+
+    init(points: [CGPoint], radius: CGFloat) {
+        self.id = UUID()
+        self.points = points
+        self.radius = radius
+    }
+
+    init(id: UUID, points: [CGPoint], radius: CGFloat) {
+        self.id = id
+        self.points = points
+        self.radius = radius
     }
 }
 
