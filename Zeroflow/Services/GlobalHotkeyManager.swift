@@ -11,7 +11,10 @@ final class GlobalHotkeyManager {
     private let hotKeyID = EventHotKeyID(signature: "ZRST".fourCharCodeValue, id: 1)
 
     /// 外部通知：应从 SettingsStore 的 didSet 中触发
-    static let didChangeNotification = Notification.Name("zeroshot.shortcutDidChange")
+    static let didChangeNotification = Notification.Name("zeroflow.shortcutDidChange")
+
+    /// 截图功能开关变化通知：应从 SettingsStore.screenshotEnabled 的 didSet 中触发
+    static let screenshotEnabledDidChangeNotification = Notification.Name("zeroflow.screenshotEnabledDidChange")
 
     private var onTrigger: (() -> Void)?
 
@@ -21,6 +24,12 @@ final class GlobalHotkeyManager {
             self,
             selector: #selector(handleShortcutDidChange(_:)),
             name: Self.didChangeNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleScreenshotEnabledDidChange(_:)),
+            name: Self.screenshotEnabledDidChangeNotification,
             object: nil
         )
     }
@@ -63,6 +72,15 @@ final class GlobalHotkeyManager {
         register(shortcut)
     }
 
+    /// 按截图开关 + 当前快捷键状态重新启停全局热键（启动时 / 开关或快捷键变化时调用）
+    func reapply() {
+        if SettingsStore.shared.screenshotEnabled {
+            register(SettingsStore.shared.shortcut)
+        } else {
+            unregister()
+        }
+    }
+
     /// 录制新快捷键期间暂停全局热键，避免按下相同组合键时触发截图
     func suspend() {
         unregister()
@@ -70,7 +88,7 @@ final class GlobalHotkeyManager {
 
     /// 录制结束（成功/取消/窗口关闭）后恢复全局热键
     func resume() {
-        reinstall(shortcut: SettingsStore.shared.shortcut)
+        reapply()
     }
 
     private func carbonModifiers(for flags: NSEvent.ModifierFlags) -> UInt32 {
@@ -108,11 +126,11 @@ final class GlobalHotkeyManager {
     }
 
     @objc private func handleShortcutDidChange(_ notification: Notification) {
-        guard let shortcut = notification.userInfo?["shortcut"] as? ShortcutKey else {
-            reinstall(shortcut: SettingsStore.shared.shortcut)
-            return
-        }
-        register(shortcut)
+        reapply()
+    }
+
+    @objc private func handleScreenshotEnabledDidChange(_ notification: Notification) {
+        reapply()
     }
 }
 

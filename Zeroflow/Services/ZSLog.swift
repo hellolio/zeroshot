@@ -4,11 +4,11 @@ import Foundation
 func ZSLog(_ message: String) {
     let formatter = DateFormatter()
     formatter.dateFormat = "HH:mm:ss.SSS"
-    let line = "[zeroshot \(formatter.string(from: Date()))] \(message)\n"
+    let line = "[zeroflow \(formatter.string(from: Date()))] \(message)\n"
     FileHandle.standardError.write(line.data(using: .utf8)!)
 
     guard let data = line.data(using: .utf8) else { return }
-    let url = URL(fileURLWithPath: "/tmp/zeroshot.log")
+    let url = URL(fileURLWithPath: "/tmp/zeroflow.log")
     if let handle = try? FileHandle(forWritingTo: url) {
         handle.seekToEndOfFile()
         handle.write(data)
