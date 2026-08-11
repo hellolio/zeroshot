@@ -198,10 +198,10 @@ struct EditorView: View {
         }
 
         if let temp = tempMosaic {
-            drawMosaic(temp, context: context, cacheable: false)
+            drawMosaic(temp, context: context)
         }
         for case .mosaic(let m) in doc.elements {
-            drawMosaic(m, context: context, cacheable: true)
+            drawMosaic(m, context: context)
         }
     }
 
@@ -337,7 +337,6 @@ struct EditorView: View {
                         doc.elements.append(.mosaic(temp))
                     }
                     tempMosaic = nil
-                    mosaicOverlayCache.clearFullImage()
                 case .select:
                     let tap = abs(value.translation.width) < 4 && abs(value.translation.height) < 4
                     if tap {
@@ -601,39 +600,21 @@ struct EditorView: View {
         }
     }
 
-    /// 马赛克涂抹绘制：在笔划包围盒内马赛克化原图，再裁剪到每个涂抹圆形区域
-    /// - cacheable: 已提交笔划按包围盒缓存小图；临时笔划用整图像素化缓存（只算一次，之后每帧只 clip+draw）
-    private func drawMosaic(_ mosaic: MosaicElement, context: GraphicsContext, cacheable: Bool) {
+    /// 马赛克涂抹绘制：整图像素化（网格对齐图片原点）后裁剪到每个涂抹圆形区域。
+    /// 临时笔划与已提交笔划共用同一张叠加图，保证预览、提交、导出的样式完全一致。
+    private func drawMosaic(_ mosaic: MosaicElement, context: GraphicsContext) {
         guard let first = mosaic.points.first else { return }
         let r = mosaic.radius
-        var minX = first.x, maxX = first.x, minY = first.y, maxY = first.y
-        for p in mosaic.points.dropFirst() {
-            minX = min(minX, p.x); maxX = max(maxX, p.x)
-            minY = min(minY, p.y); maxY = max(maxY, p.y)
-        }
-        let bbox = CGRect(x: minX - r, y: minY - r,
-                          width: maxX - minX + r * 2, height: maxY - minY + r * 2)
-
         var mask = Path()
         for p in mosaic.points {
             let vp = toView(p)
             mask.addEllipse(in: CGRect(x: vp.x - r, y: vp.y - r, width: r * 2, height: r * 2))
         }
-
-        if cacheable {
-            guard let overlay = mosaicOverlayCache.overlay(for: mosaic, in: bbox, source: doc.image) else { return }
-            let viewBox = toViewRect(bbox)
-            context.drawLayer { layer in
-                layer.clip(to: mask)
-                layer.draw(Image(nsImage: overlay), in: viewBox)
-            }
-        } else {
-            guard let overlay = mosaicOverlayCache.fullOverlay(radius: mosaic.radius, source: doc.image) else { return }
-            let viewRect = toViewRect(CGRect(origin: .zero, size: doc.image.size))
-            context.drawLayer { layer in
-                layer.clip(to: mask)
-                layer.draw(Image(nsImage: overlay), in: viewRect)
-            }
+        guard let overlay = mosaicOverlayCache.fullOverlay(radius: mosaic.radius, source: doc.image) else { return }
+        let viewRect = toViewRect(CGRect(origin: .zero, size: doc.image.size))
+        context.drawLayer { layer in
+            layer.clip(to: mask)
+            layer.draw(Image(nsImage: overlay), in: viewRect)
         }
     }
 
@@ -1128,14 +1109,9 @@ struct EditorView: View {
     private static func drawMosaicIntoCanvas(_ mosaic: MosaicElement, image: NSImage) {
         guard let first = mosaic.points.first else { return }
         let r = mosaic.radius
-        var minX = first.x, maxX = first.x, minY = first.y, maxY = first.y
-        for p in mosaic.points.dropFirst() {
-            minX = min(minX, p.x); maxX = max(maxX, p.x)
-            minY = min(minY, p.y); maxY = max(maxY, p.y)
-        }
-        let bbox = CGRect(x: minX - r, y: minY - r,
-                          width: maxX - minX + r * 2, height: maxY - minY + r * 2)
-        guard let overlay = Self.pixelatedImage(image, in: bbox, block: max(4, mosaic.radius * 0.5)) else { return }
+        let fullRect = CGRect(origin: .zero, size: image.size)
+        guard let overlay = Self.pixelatedImage(image, in: fullRect,
+                                                block: max(4, mosaic.radius * 0.5)) else { return }
 
         let clip = NSBezierPath()
         for p in mosaic.points {
@@ -1143,7 +1119,7 @@ struct EditorView: View {
         }
         NSGraphicsContext.saveGraphicsState()
         clip.addClip()
-        overlay.draw(in: bbox, from: NSRect(origin: .zero, size: overlay.size),
+        overlay.draw(in: fullRect, from: NSRect(origin: .zero, size: overlay.size),
                      operation: .sourceOver, fraction: 1)
         NSGraphicsContext.restoreGraphicsState()
     }
@@ -1225,37 +1201,18 @@ struct EditorView: View {
         alert.runModal()
     }
 
-    /// 马赛克像素化叠加图缓存：已提交笔划不再变化，避免每次 Canvas 重绘都重新像素化
+    /// 马赛克像素化叠加图缓存：同一半径的整图像素化只算一次，临时笔划与已提交笔划共用，
+    /// 保证预览与提交后的样式一致
     private final class MosaicOverlayCache {
-        private let cache = NSCache<NSString, NSImage>()
-        private var fullImage: (radius: CGFloat, image: NSImage)?
+        private var fullImages: [CGFloat: NSImage] = [:]
 
-        init() {
-            cache.countLimit = 64
-            cache.totalCostLimit = 64 * 1024 * 1024
-        }
-
-        func overlay(for mosaic: MosaicElement, in bbox: CGRect, source: NSImage) -> NSImage? {
-            let key = mosaic.id.uuidString as NSString
-            if let cached = cache.object(forKey: key) { return cached }
-            guard let overlay = EditorView.pixelatedImage(source, in: bbox,
-                                                          block: max(4, mosaic.radius * 0.5)) else { return nil }
-            cache.setObject(overlay, forKey: key, cost: max(1, Int(bbox.width * bbox.height)))
-            return overlay
-        }
-
-        /// 临时涂抹用的整图像素化结果：同一半径只算一次，释放大内存时用 clearFullImage()
         func fullOverlay(radius: CGFloat, source: NSImage) -> NSImage? {
-            if let fullImage, fullImage.radius == radius { return fullImage.image }
+            if let cached = fullImages[radius] { return cached }
             let fullRect = CGRect(origin: .zero, size: source.size)
             guard let overlay = EditorView.pixelatedImage(source, in: fullRect,
                                                           block: max(4, radius * 0.5)) else { return nil }
-            fullImage = (radius, overlay)
+            fullImages[radius] = overlay
             return overlay
-        }
-
-        func clearFullImage() {
-            fullImage = nil
         }
     }
 }
