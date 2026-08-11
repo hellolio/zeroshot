@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// SLK：串联「选区 → 捕获 → 打开编辑器」的协调器
-final class CaptureCoordinator: ObservableObject {
+final class CaptureCoordinator: NSObject, ObservableObject {
     static let shared = CaptureCoordinator()
 
     /// 当前是否正在截图会话中
@@ -11,7 +11,9 @@ final class CaptureCoordinator: ObservableObject {
     private var overlayWindows: [CaptureOverlayWindow] = []
     private var editorController: NSWindowController?
 
-    private init() {}
+    private override init() {
+        super.init()
+    }
 
     // MARK: - 入口
 
@@ -174,6 +176,7 @@ final class CaptureCoordinator: ObservableObject {
         window.title = "zeroflow 截图"
         window.styleMask = styleMask
         window.isRestorable = false
+        window.delegate = self
 
         // 窗口初始尺寸根据截图自适应：
         // - 截图较小 → 窗口贴着截图大小（避免大片空白）
@@ -209,5 +212,12 @@ final class CaptureCoordinator: ObservableObject {
         window.contentView?.needsDisplay = true
         window.displayIfNeeded()
         editorController = controller
+    }
+}
+
+extension CaptureCoordinator: NSWindowDelegate {
+    /// 编辑窗口被关闭（点红点 / ⌘W）时释放控制器，避免整张截图常驻内存
+    func windowWillClose(_ notification: Notification) {
+        editorController = nil
     }
 }

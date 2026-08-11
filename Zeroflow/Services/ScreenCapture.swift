@@ -56,28 +56,62 @@ enum ScreenCapture {
         return CGRect(x: leftInScreen, y: topInScreen, width: rect.width, height: rect.height)
     }
 
-    // MARK: - ScreenCaptureKit
+    // MARK: - SCShareableContent / ContentFilter 缓存
 
-    private static func captureWithScreenCaptureKit(screen: NSScreen, rect: CGRect) async -> NSImage? {
+    /// `SCShareableContent.current` 每次调用都会全量枚举窗口/显示器，耗时可达数百毫秒，
+    /// 因此按 display 缓存 contentFilter（排除全部窗口），屏幕配置变化时失效重建。
+    private static let filterCacheLock = NSLock()
+    private static var filterCache: [CGDirectDisplayID: SCContentFilter] = [:]
+
+    static func invalidateFilterCache() {
+        filterCacheLock.lock()
+        filterCache.removeAll()
+        filterCacheLock.unlock()
+    }
+
+    /// 取屏幕对应的 contentFilter：缓存命中直接复用，未命中才枚举 SCShareableContent
+    private static func contentFilter(for displayID: CGDirectDisplayID) async -> SCContentFilter? {
+        filterCacheLock.lock()
+        if let cached = filterCache[displayID] {
+            filterCacheLock.unlock()
+            return cached
+        }
+        filterCacheLock.unlock()
+
         do {
             let content = try await SCShareableContent.current
-            ZSLog("SCShareableContent OK, \(content.displays.count) display(s)")
-            let displayID = displayID(for: screen)
             guard let scDisplay = content.displays.first(where: { $0.displayID == displayID }) else {
                 ZSLog("no SC display for id \(displayID)")
                 return nil
             }
-            let scale = screen.backingScaleFactor
-            let sourceRect = topLeftRect(in: screen, rect: rect)
-
             let filter = SCContentFilter(display: scDisplay, excludingWindows: [])
-            let config = SCStreamConfiguration()
-            config.width = Int(rect.width * scale)
-            config.height = Int(rect.height * scale)
-            config.showsCursor = false
-            config.sourceRect = sourceRect
-            ZSLog("SC config: w=\(config.width) h=\(config.height) source=\(sourceRect)")
+            filterCacheLock.lock()
+            filterCache[displayID] = filter
+            filterCacheLock.unlock()
+            return filter
+        } catch {
+            ZSLog("SCShareableContent error: \(error)")
+            return nil
+        }
+    }
 
+    // MARK: - ScreenCaptureKit
+
+    private static func captureWithScreenCaptureKit(screen: NSScreen, rect: CGRect) async -> NSImage? {
+        let displayID = displayID(for: screen)
+        guard let filter = await contentFilter(for: displayID) else { return nil }
+
+        let scale = screen.backingScaleFactor
+        let sourceRect = topLeftRect(in: screen, rect: rect)
+
+        let config = SCStreamConfiguration()
+        config.width = Int(rect.width * scale)
+        config.height = Int(rect.height * scale)
+        config.showsCursor = false
+        config.sourceRect = sourceRect
+        ZSLog("SC config: w=\(config.width) h=\(config.height) source=\(sourceRect)")
+
+        do {
             let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
             return NSImage(cgImage: cgImage,
                            size: NSSize(width: CGFloat(cgImage.width) / scale,
