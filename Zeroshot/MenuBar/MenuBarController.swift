@@ -1,6 +1,11 @@
 import AppKit
 import SwiftUI
 
+extension Notification.Name {
+    /// 请求打开设置窗口（如无截屏权限时引导授权）
+    static let zeroshotOpenSettings = Notification.Name("zeroshot.openSettings")
+}
+
 /// 菜单栏控制器：常驻菜单栏，提供「设置」与「退出」
 final class MenuBarController: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
@@ -10,11 +15,20 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         setupMenuBar()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(openSettings),
+            name: .zeroshotOpenSettings,
+            object: nil
+        )
 
         GlobalHotkeyManager.shared.setTriggerHandler {
             CaptureCoordinator.shared.startCapture()
         }
         GlobalHotkeyManager.shared.register(SettingsStore.shared.shortcut)
+
+        // Dock 单击最小化：按开关初始状态启停（开关变化由 DockClickMinimizer 自行监听恢复）
+        DockClickMinimizer.shared.reapply()
 
         if ProcessInfo.processInfo.environment["ZEROSHOT_AUTO_CAPTURE"] == "1" {
             ZSLog("env ZEROSHOT_AUTO_CAPTURE: defer 1.5s then capture")
@@ -26,6 +40,12 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
             ZSLog("env ZEROSHOT_EDITOR_DEBUG: defer 1.5s then open editor directly")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 CaptureCoordinator.shared.openEditorForDebug()
+            }
+        }
+        if ProcessInfo.processInfo.environment["ZEROSHOT_DOCK_PROBE"] == "1" {
+            ZSLog("env ZEROSHOT_DOCK_PROBE: defer 1s then dump dock AX tree")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                DockClickMinimizer.runProbe()
             }
         }
     }
@@ -81,7 +101,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
                 contentViewController: NSHostingController(rootView: SettingsView())
             )
             window.title = "zeroshot 设置"
-            window.setContentSize(NSSize(width: 560, height: 480))
+            window.setContentSize(NSSize(width: 560, height: 640))
             window.styleMask = [.titled, .closable]
             window.isReleasedWhenClosed = false
             window.center()

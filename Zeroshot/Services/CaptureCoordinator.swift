@@ -10,8 +10,6 @@ final class CaptureCoordinator: ObservableObject {
 
     private var overlayWindows: [CaptureOverlayWindow] = []
     private var editorController: NSWindowController?
-    private var permissionAlert: NSAlert?
-    private var isShowingAlert = false
 
     private init() {}
 
@@ -42,40 +40,10 @@ final class CaptureCoordinator: ObservableObject {
 
     // MARK: - 权限引导
 
+    /// 无截屏权限时不弹窗，改为打开设置页的「截图」标签页展示权限引导
     private func presentPermissionGuide() {
-        // 防止重复弹窗（例如热键与菜单同时触发）
-        guard !isShowingAlert else { return }
-        isShowingAlert = true
-        ZSLog("presentPermissionGuide")
-        let alert = NSAlert()
-        alert.messageText = "需要「屏幕录制」权限"
-        alert.informativeText = """
-        zeroshot 需要屏幕录制权限来截取屏幕内容。
-
-        1. 点击下方「打开系统设置」
-        2. 在「隐私与安全性 → 屏幕录制」中，为 Zeroshot 打开开关
-        3. 回到应用后点击「我已授权，重新检测」
-
-        注意：应用每次重新编译后系统会把它当作新的程序，需要重新授权一次。
-        """
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "打开系统设置")
-        alert.addButton(withTitle: "我已授权，重新检测")
-        permissionAlert = alert
-        NSApp.activate(ignoringOtherApps: true)
-        let alertWindow = alert.window
-        alertWindow.level = .floating
-        alertWindow.orderFrontRegardless()
-        let resp = alert.runModal()
-        isShowingAlert = false
-        if resp == .alertFirstButtonReturn {
-            ScreenRecordingPermission.requestAuthorization()
-        }
-        permissionAlert = nil
-        // 授权后重新检测，直接进入下一步，无需重启应用
-        if resp == .alertSecondButtonReturn {
-            startCapture()
-        }
+        ZSLog("presentPermissionGuide: open settings")
+        NotificationCenter.default.post(name: .zeroshotOpenSettings, object: nil)
     }
 
     // MARK: - 覆盖层

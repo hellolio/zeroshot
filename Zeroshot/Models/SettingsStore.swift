@@ -12,6 +12,7 @@ final class SettingsStore: ObservableObject {
         static let launchAtLogin = "launchAtLogin"
         static let saveDirectory = "saveDirectory"
         static let askSaveLocation = "askSaveLocation"
+        static let dockClickMinimize = "dockClickMinimize"
     }
 
     private let defaults: UserDefaults
@@ -29,10 +30,12 @@ final class SettingsStore: ObservableObject {
             Keys.launchAtLogin: true,
             Keys.saveDirectory: Self.defaultSaveDirectory,
             Keys.askSaveLocation: false,
+            Keys.dockClickMinimize: false,
         ])
         _launchAtLogin = Published(initialValue: defaults.bool(forKey: Keys.launchAtLogin))
         _saveDirectory = Published(initialValue: defaults.string(forKey: Keys.saveDirectory) ?? Self.defaultSaveDirectory)
         _askSaveLocation = Published(initialValue: defaults.bool(forKey: Keys.askSaveLocation))
+        _dockClickMinimize = Published(initialValue: defaults.bool(forKey: Keys.dockClickMinimize))
         _shortcut = Published(initialValue: Self.loadShortcut(from: defaults))
         ensureDefaultDirectoryExists()
     }
@@ -131,6 +134,19 @@ final class SettingsStore: ObservableObject {
 
     @Published var askSaveLocation: Bool {
         didSet { defaults.set(askSaveLocation, forKey: Keys.askSaveLocation) }
+    }
+
+    // MARK: - Dock
+
+    @Published var dockClickMinimize: Bool {
+        didSet {
+            defaults.set(dockClickMinimize, forKey: Keys.dockClickMinimize)
+            NotificationCenter.default.post(
+                name: DockClickMinimizer.didChangeNotification,
+                object: nil,
+                userInfo: ["enabled": dockClickMinimize]
+            )
+        }
     }
 
     // MARK: - 最近保存
