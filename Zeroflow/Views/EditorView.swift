@@ -1180,7 +1180,7 @@ struct EditorView: View {
     static func fileName() -> String {
         let df = DateFormatter()
         df.dateFormat = "yyyyMMdd_HHmmss"
-        return "zeroshot_\(df.string(from: Date())).png"
+        return "zeroflow_\(df.string(from: Date())).png"
     }
 
     private func presentAlert(title: String, message: String) {

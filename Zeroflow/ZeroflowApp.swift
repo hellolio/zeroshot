@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 @main
-struct ZeroshotMain {
+struct ZeroflowMain {
     static func main() {
         let app = NSApplication.shared
         let controller = MenuBarController()

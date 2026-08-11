@@ -1,14 +1,14 @@
-# 【需求文档 v1.0】Dock 点击最小化窗口模块（集成于 zeroshot）
+# 【需求文档 v1.0】Dock 点击最小化窗口模块（集成于 zeroflow）
 
 > 状态：待评审
-> 宿主：zeroshot（`~/Documents/10source/zeroshot`）
+> 宿主：zeroflow（`~/Documents/10source/zeroflow`）
 > 交付物：本需求文档 +（后续集成阶段）宿主内的功能模块源码
 
 ---
 
 ## 1. 产品定位
 
-为 zeroshot 新增一个能力：**单击 Dock 上「当前前台已激活 app」的图标，最小化该 app 的「前台窗口」——即聚焦窗口（最近操作的窗口，取不到回退主窗口）**。恢复窗口完全交给 macOS 原生行为（再点一次 Dock 图标即恢复），本模块只做"最小化"这一个方向。
+为 zeroflow 新增一个能力：**单击 Dock 上「当前前台已激活 app」的图标，最小化该 app 的「前台窗口」——即聚焦窗口（最近操作的窗口，取不到回退主窗口）**。恢复窗口完全交给 macOS 原生行为（再点一次 Dock 图标即恢复），本模块只做"最小化"这一个方向。
 
 模块后台无感运行，**不新增菜单栏图标、不新增 Dock 图标**，完全由宿主设置页的一个开关驱动。
 
@@ -62,8 +62,8 @@
 
 | 项 | 说明 |
 |---|---|
-| 宿主工程 | zeroshot，SwiftUI + AppKit，无第三方依赖，macOS 14+，`PBXFileSystemSynchronizedRootGroup`（新文件自动编译，无需改 pbxproj） |
-| 新增文件 | `Zeroshot/Services/AccessibilityPermission.swift`（权限检测）、`Zeroshot/Services/DockClickMinimizer.swift`（事件 tap + 判定 + 最小化逻辑） |
+| 宿主工程 | zeroflow，SwiftUI + AppKit，无第三方依赖，macOS 14+，`PBXFileSystemSynchronizedRootGroup`（新文件自动编译，无需改 pbxproj） |
+| 新增文件 | `Zeroflow/Services/AccessibilityPermission.swift`（权限检测）、`Zeroflow/Services/DockClickMinimizer.swift`（事件 tap + 判定 + 最小化逻辑） |
 | 接入 SettingsStore | 新增 `@Published var dockClickMinimize: Bool`（key `dockClickMinimize`），`didSet` 发通知（风格同 `shortcutDidChange`） |
 | 接入 MenuBarController | `applicationDidFinishLaunching` 时读开关初始状态启停；监听开关通知启停 tap |
 | 接入 SettingsView | 新增「Dock」Section，含开关 + 权限状态 + 系统设置引导 |

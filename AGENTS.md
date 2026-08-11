@@ -8,19 +8,19 @@ macOS 截图菜单栏工具(截图 + 画线/文字气泡/矩形/椭圆/马赛克
 
 ```bash
 # Debug
-xcodebuild -project Zeroshot.xcodeproj -scheme Zeroshot -configuration Debug -derivedDataPath build build
-# 产物一般在 build/Build/Products/Debug/Zeroshot.app
-open build/Build/Products/Debug/Zeroshot.app
+xcodebuild -project Zeroflow.xcodeproj -scheme Zeroflow -configuration Debug -derivedDataPath build build
+# 产物一般在 build/Build/Products/Debug/Zeroflow.app
+open build/Build/Products/Debug/Zeroflow.app
 ```
 
-- **产物路径不可靠**: Debug 产物可能落在 `build/Build/Intermediates.noindex/ArchiveIntermediates/.../Applications/Zeroshot.app`(`cp -R` 复制这个可能是坏符号链接)。用 `find <derived>/Build -name "Zeroshot.app"` 定位,复制用 `cp -R -L` 解引用,复制前 `rm -rf` 目标。
-- **dist/ 已被 gitignore**,是发布副本。部署流程: `rm -rf dist/Zeroshot.app && cp -R -L <找到的app> dist/ && pkill -f Zeroshot.app`,再 `open dist/Zeroshot.app`。
+- **产物路径不可靠**: Debug 产物可能落在 `build/Build/Intermediates.noindex/ArchiveIntermediates/.../Applications/Zeroflow.app`(`cp -R` 复制这个可能是坏符号链接)。用 `find <derived>/Build -name "Zeroflow.app"` 定位,复制用 `cp -R -L` 解引用,复制前 `rm -rf` 目标。
+- **dist/ 已被 gitignore**,是发布副本。部署流程: `rm -rf dist/Zeroflow.app && cp -R -L <找到的app> dist/ && pkill -f Zeroflow.app`,再 `open dist/Zeroflow.app`。
 - 给 `-derivedDataPath` 的目录若无写权限,构建会直接 `BUILD FAILED`(0644/只读目录),换一个可写路径。
 - **新增 .swift 文件自动纳入编译**: 工程用 `PBXFileSystemSynchronizedRootGroup`,不要手动改 pbxproj 加文件。
 
 ## 架构要点
 
-- 入口 `Zeroshot/ZeroshotApp.swift`; 菜单栏 `MenuBar/MenuBarController.swift`; 服务层 `Services/`(热键 GlobalHotkeyManager、截屏 ScreenCapture、协调 CaptureCoordinator、日志 ZSLog)。
+- 入口 `Zeroflow/ZeroflowApp.swift`; 菜单栏 `MenuBar/MenuBarController.swift`; 服务层 `Services/`(热键 GlobalHotkeyManager、截屏 ScreenCapture、协调 CaptureCoordinator、日志 ZSLog)。
 - 编辑页就是 `Views/EditorView.swift`(单一超 800 行文件)。新增其他工具/图形也先加在这个文件。
 
 ### 编辑画布模型(`Models/EditDocument.swift`)

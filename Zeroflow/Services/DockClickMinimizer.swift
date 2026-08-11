@@ -20,7 +20,7 @@ final class DockClickMinimizer {
     static let shared = DockClickMinimizer()
 
     /// 外部通知：由 SettingsStore.dockClickMinimize 的 didSet 触发
-    static let didChangeNotification = Notification.Name("zeroshot.dockClickMinimizeDidChange")
+    static let didChangeNotification = Notification.Name("zeroflow.dockClickMinimizeDidChange")
 
     private static let dockBundleID = "com.apple.dock"
     private static let dockItemRole = "AXApplicationDockItem"
@@ -48,7 +48,7 @@ final class DockClickMinimizer {
     private var dockCache: [DockItemEntry] = []
     private var cacheInvalid = true
     private var pendingCacheRebuild: DispatchWorkItem?
-    private let cacheQueue = DispatchQueue(label: "zeroshot.dock-cache")
+    private let cacheQueue = DispatchQueue(label: "zeroflow.dock-cache")
     private var workspaceObservers: [NSObjectProtocol] = []
 
     private init() {
@@ -166,7 +166,7 @@ final class DockClickMinimizer {
         let t = Thread { [weak self] in
             self?.runTapLoop()
         }
-        t.name = "zeroshot.dock-minimize"
+        t.name = "zeroflow.dock-minimize"
         t.qualityOfService = .userInitiated
         thread = t
         t.start()
@@ -264,7 +264,7 @@ final class DockClickMinimizer {
         minimizer.retryCreateTapIfNeeded()
     }
 
-    // MARK: - 独立诊断探针（ZEROSHOT_DOCK_PROBE=1 启动时执行）
+    // MARK: - 独立诊断探针（ZEROFLOW_DOCK_PROBE=1 启动时执行）
 
     static func runProbe() {
         ZSLog("DOCK-PROBE begin, AX trusted = \(AccessibilityPermission.isGranted)")

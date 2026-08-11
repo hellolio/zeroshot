@@ -47,7 +47,7 @@ final class CaptureCoordinator: ObservableObject {
     /// 无截屏权限时不弹窗，改为打开设置页的「截图」标签页展示权限引导
     private func presentPermissionGuide() {
         ZSLog("presentPermissionGuide: open settings")
-        NotificationCenter.default.post(name: .zeroshotOpenSettings, object: nil)
+        NotificationCenter.default.post(name: .zeroflowOpenSettings, object: nil)
     }
 
     // MARK: - 覆盖层
@@ -171,7 +171,7 @@ final class CaptureCoordinator: ObservableObject {
         ))
 
         let window = NSWindow(contentViewController: hosting)
-        window.title = "zeroshot 截图"
+        window.title = "zeroflow 截图"
         window.styleMask = styleMask
         window.isRestorable = false
 

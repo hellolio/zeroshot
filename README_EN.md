@@ -1,4 +1,4 @@
-# zeroshot
+# zeroflow
 
 A free, ad-free native screenshot tool for macOS. Lives in the menu bar — press `⌘⇧S` to capture and annotate instantly. Small install size, fast startup.
 
@@ -24,10 +24,10 @@ A free, ad-free native screenshot tool for macOS. Lives in the menu bar — pres
 ## Structure
 
 ```
-zeroshot/
-├── Zeroshot.xcodeproj/          # Xcode project
-├── Zeroshot/                    # Source code
-│   ├── ZeroshotApp.swift        # App entry
+zeroflow/
+├── Zeroflow.xcodeproj/          # Xcode project
+├── Zeroflow/                    # Source code
+│   ├── ZeroflowApp.swift        # App entry
 │   ├── MenuBar/                 # Menu bar controller
 │   ├── Models/                  # Settings, document models
 │   ├── Views/                   # Settings, capture overlay, editor
@@ -42,14 +42,14 @@ zeroshot/
 Requires macOS 14.0+ and Xcode 16+.
 
 ```bash
-cd zeroshot
-xcodebuild -project Zeroshot.xcodeproj -scheme Zeroshot \
+cd zeroflow
+xcodebuild -project Zeroflow.xcodeproj -scheme Zeroflow \
   -configuration Debug -derivedDataPath build build
 
-open build/Build/Products/Debug/Zeroshot.app
+open build/Build/Products/Debug/Zeroflow.app
 ```
 
-> New source files placed in `Zeroshot/` are compiled automatically (no pbxproj edits needed). A prebuilt copy exists at `dist/Zeroshot.app` (arm64).
+> New source files placed in `Zeroflow/` are compiled automatically (no pbxproj edits needed). A prebuilt copy exists at `dist/Zeroflow.app` (arm64).
 
 ## License
 

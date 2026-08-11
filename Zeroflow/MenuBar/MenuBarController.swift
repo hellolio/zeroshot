@@ -3,7 +3,7 @@ import SwiftUI
 
 extension Notification.Name {
     /// 请求打开设置窗口（如无截屏权限时引导授权）
-    static let zeroshotOpenSettings = Notification.Name("zeroshot.openSettings")
+    static let zeroflowOpenSettings = Notification.Name("zeroflow.openSettings")
 }
 
 /// 菜单栏控制器：常驻菜单栏，提供「设置」与「退出」
@@ -20,7 +20,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(openSettings),
-            name: .zeroshotOpenSettings,
+            name: .zeroflowOpenSettings,
             object: nil
         )
         NotificationCenter.default.addObserver(
@@ -39,20 +39,20 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         // Dock 单击最小化：按开关初始状态启停（开关变化由 DockClickMinimizer 自行监听恢复）
         DockClickMinimizer.shared.reapply()
 
-        if ProcessInfo.processInfo.environment["ZEROSHOT_AUTO_CAPTURE"] == "1" {
-            ZSLog("env ZEROSHOT_AUTO_CAPTURE: defer 1.5s then capture")
+        if ProcessInfo.processInfo.environment["ZEROFLOW_AUTO_CAPTURE"] == "1" {
+            ZSLog("env ZEROFLOW_AUTO_CAPTURE: defer 1.5s then capture")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 CaptureCoordinator.shared.startCapture()
             }
         }
-        if ProcessInfo.processInfo.environment["ZEROSHOT_EDITOR_DEBUG"] == "1" {
-            ZSLog("env ZEROSHOT_EDITOR_DEBUG: defer 1.5s then open editor directly")
+        if ProcessInfo.processInfo.environment["ZEROFLOW_EDITOR_DEBUG"] == "1" {
+            ZSLog("env ZEROFLOW_EDITOR_DEBUG: defer 1.5s then open editor directly")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 CaptureCoordinator.shared.openEditorForDebug()
             }
         }
-        if ProcessInfo.processInfo.environment["ZEROSHOT_DOCK_PROBE"] == "1" {
-            ZSLog("env ZEROSHOT_DOCK_PROBE: defer 1s then dump dock AX tree")
+        if ProcessInfo.processInfo.environment["ZEROFLOW_DOCK_PROBE"] == "1" {
+            ZSLog("env ZEROFLOW_DOCK_PROBE: defer 1s then dump dock AX tree")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 DockClickMinimizer.runProbe()
             }
@@ -62,8 +62,8 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
     private func setupMenuBar() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(
-            systemSymbolName: "camera.viewfinder",
-            accessibilityDescription: "zeroshot"
+            systemSymbolName: "bolt.fill",
+            accessibilityDescription: "zeroflow"
         )
         item.button?.imagePosition = .imageOnly
 
@@ -89,7 +89,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         }
 
         menu.addItem(.separator())
-        let quitItem = NSMenuItem(title: "退出 zeroshot", action: #selector(quit), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "退出 zeroflow", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -116,7 +116,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
             let window = NSWindow(
                 contentViewController: NSHostingController(rootView: SettingsView())
             )
-            window.title = "zeroshot 设置"
+            window.title = "zeroflow 设置"
             window.setContentSize(NSSize(width: 560, height: 640))
             window.styleMask = [.titled, .closable]
             window.isReleasedWhenClosed = false

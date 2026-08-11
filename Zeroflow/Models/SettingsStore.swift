@@ -18,11 +18,11 @@ final class SettingsStore: ObservableObject {
 
     private let defaults: UserDefaults
 
-    /// 默认保存位置：~/Downloads/zeroshot
+    /// 默认保存位置：~/Downloads/zeroflow
     static var defaultSaveDirectory: String {
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
         return (downloads ?? FileManager.default.homeDirectoryForCurrentUser)
-            .appendingPathComponent("zeroshot", isDirectory: true).path
+            .appendingPathComponent("zeroflow", isDirectory: true).path
     }
 
     init(defaults: UserDefaults = .standard) {

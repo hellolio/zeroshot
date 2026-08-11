@@ -10,7 +10,7 @@ enum ScreenRecordingPermission {
 
     /// 真实权限探测：尝试获取可共享屏幕内容。与截图走同一权限路径，避免 preflight 缓存误判。
     static func hasScreenCaptureAccess() async -> Bool {
-        if ProcessInfo.processInfo.environment["ZEROSHOT_FAKE_PERMISSION"] == "1" {
+        if ProcessInfo.processInfo.environment["ZEROFLOW_FAKE_PERMISSION"] == "1" {
             ZSLog("FAKE permission granted (debug)")
             return true
         }

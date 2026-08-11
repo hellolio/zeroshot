@@ -11,10 +11,10 @@ final class GlobalHotkeyManager {
     private let hotKeyID = EventHotKeyID(signature: "ZRST".fourCharCodeValue, id: 1)
 
     /// 外部通知：应从 SettingsStore 的 didSet 中触发
-    static let didChangeNotification = Notification.Name("zeroshot.shortcutDidChange")
+    static let didChangeNotification = Notification.Name("zeroflow.shortcutDidChange")
 
     /// 截图功能开关变化通知：应从 SettingsStore.screenshotEnabled 的 didSet 中触发
-    static let screenshotEnabledDidChangeNotification = Notification.Name("zeroshot.screenshotEnabledDidChange")
+    static let screenshotEnabledDidChangeNotification = Notification.Name("zeroflow.screenshotEnabledDidChange")
 
     private var onTrigger: (() -> Void)?
 

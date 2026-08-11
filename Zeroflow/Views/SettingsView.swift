@@ -35,7 +35,7 @@ struct SettingsView: View {
         .frame(minWidth: 520, minHeight: 560)
         .padding()
         // 无权限触发截图时自动跳到「截图」标签页，让权限引导直接可见
-        .onReceive(NotificationCenter.default.publisher(for: .zeroshotOpenSettings)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .zeroflowOpenSettings)) { _ in
             selectedTab = .screenshot
         }
     }
@@ -96,7 +96,7 @@ struct SettingsView: View {
             } header: {
                 Text("开机自启")
             } footer: {
-                Text("开启后，登录 macOS 时自动在后台启动 zeroshot，可随时用快捷键截图。")
+                Text("开启后，登录 macOS 时自动在后台启动 zeroflow，可随时用快捷键截图。")
             }
         }
         .formStyle(.grouped)
@@ -177,7 +177,7 @@ private struct ScreenRecordingPermissionRow: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("需要「屏幕录制」权限才能截图", systemImage: "exclamationmark.triangle.fill")
                         .foregroundColor(.orange)
-                    Text("1. 点击下方「打开系统设置授权」\n2. 在「隐私与安全性 → 屏幕录制」中为 Zeroshot 打开开关\n3. 授权后回到应用，点击「重新检测」")
+                    Text("1. 点击下方「打开系统设置授权」\n2. 在「隐私与安全性 → 屏幕录制」中为 Zeroflow 打开开关\n3. 授权后回到应用，点击「重新检测」")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     HStack(spacing: 12) {
