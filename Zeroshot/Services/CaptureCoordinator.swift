@@ -19,6 +19,10 @@ final class CaptureCoordinator: ObservableObject {
     func startCapture() {
         ZSLog("startCapture called, preflight granted = \(ScreenRecordingPermission.isGranted)")
         guard !isActive else { ZSLog("already active, ignore"); return }
+        guard SettingsStore.shared.screenshotEnabled else {
+            ZSLog("screenshot disabled, ignore")
+            return
+        }
         isActive = true
         Task {
             // 用真实权限探测：与截图使用同一 ScreenCaptureKit API

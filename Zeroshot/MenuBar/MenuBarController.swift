@@ -12,6 +12,8 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
 
     private var settingsWindowController: NSWindowController?
 
+    private var captureItem: NSMenuItem?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         setupMenuBar()
@@ -21,11 +23,18 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
             name: .zeroshotOpenSettings,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(screenshotEnabledDidChange(_:)),
+            name: GlobalHotkeyManager.screenshotEnabledDidChangeNotification,
+            object: nil
+        )
 
         GlobalHotkeyManager.shared.setTriggerHandler {
             CaptureCoordinator.shared.startCapture()
         }
-        GlobalHotkeyManager.shared.register(SettingsStore.shared.shortcut)
+        GlobalHotkeyManager.shared.reapply()
+        SettingsStore.shared.reconcileLaunchAtLogin()
 
         // Dock 单击最小化：按开关初始状态启停（开关变化由 DockClickMinimizer 自行监听恢复）
         DockClickMinimizer.shared.reapply()
@@ -65,6 +74,8 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
             action: #selector(startScreenshot), keyEquivalent: ""
         )
         captureItem.target = self
+        captureItem.isEnabled = SettingsStore.shared.screenshotEnabled
+        self.captureItem = captureItem
         menu.addItem(captureItem)
 
         let settingsItem = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
@@ -88,6 +99,11 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
 
     @objc private func startScreenshot() {
         CaptureCoordinator.shared.startCapture()
+    }
+
+    @objc private func screenshotEnabledDidChange(_ notification: Notification) {
+        let enabled = (notification.userInfo?["enabled"] as? Bool) ?? SettingsStore.shared.screenshotEnabled
+        captureItem?.isEnabled = enabled
     }
 
     @objc private func openRecent() {

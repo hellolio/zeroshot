@@ -45,6 +45,21 @@ struct SettingsView: View {
     private var screenshotTab: some View {
         Form {
             Section {
+                Toggle("启用截图功能", isOn: $store.screenshotEnabled)
+                    .onChange(of: store.screenshotEnabled) { enabled in
+                        guard enabled else { return }
+                        // 用便宜的 preflight 判断（不弹窗），未授权再弹系统授权窗，避免重复弹窗
+                        if !ScreenRecordingPermission.isGranted {
+                            ScreenRecordingPermission.requestAuthorization()
+                        }
+                    }
+            } header: {
+                Text("启用")
+            } footer: {
+                Text("关闭后，全局快捷键与菜单栏「立即截图」将停止工作。")
+            }
+
+            Section {
                 LabeledContent("截屏快捷键") {
                     ShortcutRecorderView(store: store)
                 }
@@ -52,10 +67,12 @@ struct SettingsView: View {
                 Text("快捷键")
             }
 
-            Section {
-                ScreenRecordingPermissionRow()
-            } header: {
-                Text("屏幕录制权限")
+            if store.screenshotEnabled {
+                Section {
+                    ScreenRecordingPermissionRow()
+                } header: {
+                    Text("屏幕录制权限")
+                }
             }
 
             Section {
@@ -91,6 +108,12 @@ struct SettingsView: View {
         Form {
             Section {
                 Toggle("单击 Dock 图标最小化窗口", isOn: $store.dockClickMinimize)
+                    .onChange(of: store.dockClickMinimize) { enabled in
+                        guard enabled else { return }
+                        if !AccessibilityPermission.isGranted {
+                            AccessibilityPermission.requestAuthorization()
+                        }
+                    }
                 if store.dockClickMinimize {
                     DockPermissionRow()
                     LabeledContent("桌面与 Dock") {

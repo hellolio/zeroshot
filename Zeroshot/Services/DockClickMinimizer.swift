@@ -2,7 +2,8 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 
-/// Dock 单击最小化：单击前台已激活 app 的 Dock 图标，最小化其在当前空间的可见非全屏窗口。
+/// Dock 单击最小化：单击前台已激活 app 的 Dock 图标，最小化该 app 的「前台窗口」
+/// （聚焦窗口，取不到回退主窗口；聚焦窗口不可最小化时放行交给系统）。
 ///
 /// 实现要点：
 /// - 用 CGEventTap 监听左键 + AX 命中测试识别被点击的 Dock 项；成功后吞掉事件，
@@ -579,39 +580,37 @@ final class DockClickMinimizer {
 
     // MARK: - 最小化
 
-    /// 吞事件前的快速判断：该 app 是否能举出可最小化窗口（非最小化、非全屏）。
+    /// 吞事件前的快速判断：该 app 是否存在可最小化的「前台窗口」。
     /// 纯 AX 枚举，不依赖 CGWindowList（后者在无屏幕录制权限时拿不到其他 app 窗口，
     /// 曾经的根因）。
     private func shouldMinimize(_ app: NSRunningApplication) -> Bool {
-        let count = hiddenEligibleWindowCount(of: app)
-        ZSLog("DockClickMinimizer.shouldMinimize(\(app.localizedName ?? "?")): minimizable=\(count)")
-        return count > 0
-    }
-
-    /// 统计 app 可被最小化的窗口数（供吞事件决策，避免「吞了却没东西可最小化」）
-    private func hiddenEligibleWindowCount(of app: NSRunningApplication) -> Int {
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        guard let windows = copyAXElements(appElement, kAXWindowsAttribute) else { return 0 }
         let onScreenFrames = NSScreen.screens.map { topLeftFrame(of: $0) }
-        return windows.reduce(0) { count, window in
-            count + (isMinimizable(window, onScreenFrames: onScreenFrames) ? 1 : 0)
-        }
+        let found = frontMinimizableWindow(of: appElement, onScreenFrames: onScreenFrames) != nil
+        ZSLog("DockClickMinimizer.shouldMinimize(\(app.localizedName ?? "?")): minimizable-front=\(found)")
+        return found
     }
 
-    /// 最小化 app 的所有可最小化窗口（AX 枚举，跨屏都收）。
+    /// 返回 app 的可最小化「前台窗口」：聚焦窗口（kAXFocusedWindow，即最近操作的窗口）优先，
+    /// 取不到再回退主窗口（kAXMainWindow）。
+    /// 候选存在但不可最小化（如全屏/已最小化）时返回 nil —— 不回退到其他窗口，交给系统默认行为。
+    private func frontMinimizableWindow(of appElement: AXUIElement, onScreenFrames: [CGRect]) -> AXUIElement? {
+        if let focused = copyAXValue(appElement, kAXFocusedWindowAttribute, as: AXUIElement.self) {
+            return isMinimizable(focused, onScreenFrames: onScreenFrames) ? focused : nil
+        }
+        if let main = copyAXValue(appElement, kAXMainWindowAttribute, as: AXUIElement.self) {
+            return isMinimizable(main, onScreenFrames: onScreenFrames) ? main : nil
+        }
+        return nil
+    }
+
+    /// 最小化 app 的前台（聚焦）窗口。
     /// 异步执行：不在事件回调内跑多窗口 AX 写入。
     private func minimizeFrontmostAppWindows(_ app: NSRunningApplication) -> Bool {
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        guard let windows = copyAXElements(appElement, kAXWindowsAttribute) else { return false }
         let onScreenFrames = NSScreen.screens.map { topLeftFrame(of: $0) }
-
-        var minimizedAny = false
-        for window in windows where isMinimizable(window, onScreenFrames: onScreenFrames) {
-            if AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanTrue) == .success {
-                minimizedAny = true
-            }
-        }
-        return minimizedAny
+        guard let window = frontMinimizableWindow(of: appElement, onScreenFrames: onScreenFrames) else { return false }
+        return AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanTrue) == .success
     }
 
     /// 窗口是否可最小化：非最小化、非全屏、且与某块屏幕的框架有重叠（丢弃几何离屏窗口）

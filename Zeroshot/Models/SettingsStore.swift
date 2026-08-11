@@ -12,6 +12,7 @@ final class SettingsStore: ObservableObject {
         static let launchAtLogin = "launchAtLogin"
         static let saveDirectory = "saveDirectory"
         static let askSaveLocation = "askSaveLocation"
+        static let screenshotEnabled = "screenshotEnabled"
         static let dockClickMinimize = "dockClickMinimize"
     }
 
@@ -30,11 +31,13 @@ final class SettingsStore: ObservableObject {
             Keys.launchAtLogin: true,
             Keys.saveDirectory: Self.defaultSaveDirectory,
             Keys.askSaveLocation: false,
+            Keys.screenshotEnabled: false,
             Keys.dockClickMinimize: false,
         ])
         _launchAtLogin = Published(initialValue: defaults.bool(forKey: Keys.launchAtLogin))
         _saveDirectory = Published(initialValue: defaults.string(forKey: Keys.saveDirectory) ?? Self.defaultSaveDirectory)
         _askSaveLocation = Published(initialValue: defaults.bool(forKey: Keys.askSaveLocation))
+        _screenshotEnabled = Published(initialValue: defaults.bool(forKey: Keys.screenshotEnabled))
         _dockClickMinimize = Published(initialValue: defaults.bool(forKey: Keys.dockClickMinimize))
         _shortcut = Published(initialValue: Self.loadShortcut(from: defaults))
         ensureDefaultDirectoryExists()
@@ -86,38 +89,55 @@ final class SettingsStore: ObservableObject {
 
     @Published var launchAtLogin: Bool {
         didSet {
-            guard !isSyncingLaunchAtLogin else { return }
-            isSyncingLaunchAtLogin = true
-            defer { isSyncingLaunchAtLogin = false }
+            syncLaunchAtLogin()
+        }
+    }
 
-            defaults.set(launchAtLogin, forKey: Keys.launchAtLogin)
-            guard #available(macOS 13.0, *) else { return }
+    /// 启动时把「持久化的开关值」与「系统登录项实际注册状态」对齐。
+    /// 首次启动默认值为开（init 直接读入，didSet 不触发），此方法补上真正注册，
+    /// 修复「默认开但重启不自动启动」的问题。
+    func reconcileLaunchAtLogin() {
+        syncLaunchAtLogin()
+    }
 
-            let status = SMAppService.mainApp.status
-            if launchAtLogin {
+    /// 将当前 launchAtLogin 值同步到系统登录项（注册/注销）。
+    /// 手动开关与启动时 reconcile 共用，带防重入守卫。
+    private func syncLaunchAtLogin() {
+        guard !isSyncingLaunchAtLogin else { return }
+        isSyncingLaunchAtLogin = true
+        defer { isSyncingLaunchAtLogin = false }
+
+        defaults.set(launchAtLogin, forKey: Keys.launchAtLogin)
+        guard #available(macOS 13.0, *) else { return }
+
+        let status = SMAppService.mainApp.status
+        if launchAtLogin {
+            guard status != .enabled else {
+                ZSLog("launchAtLogin ON: already registered, skip")
+                return
+            }
+            do {
+                try SMAppService.mainApp.register()
+                ZSLog("launchAtLogin ON: registered, status=\(status)")
+            } catch {
+                let reverted = false
+                launchAtLogin = reverted
+                defaults.set(false, forKey: Keys.launchAtLogin)
+                ZSLog("launchAtLogin ON failed: \(error), status=\(status)")
+            }
+        } else {
+            switch status {
+            case .notRegistered, .notFound:
+                ZSLog("launchAtLogin OFF: not registered, only persist OFF, status=\(status)")
+            default:
                 do {
-                    try SMAppService.mainApp.register()
-                    ZSLog("launchAtLogin ON: registered, status=\(status)")
+                    try SMAppService.mainApp.unregister()
+                    ZSLog("launchAtLogin OFF: unregistered, status=\(status)")
                 } catch {
-                    let reverted = false
+                    let reverted = true
                     launchAtLogin = reverted
-                    defaults.set(false, forKey: Keys.launchAtLogin)
-                    ZSLog("launchAtLogin ON failed: \(error), status=\(status)")
-                }
-            } else {
-                switch status {
-                case .notRegistered, .notFound:
-                    ZSLog("launchAtLogin OFF: not registered, only persist OFF, status=\(status)")
-                default:
-                    do {
-                        try SMAppService.mainApp.unregister()
-                        ZSLog("launchAtLogin OFF: unregistered, status=\(status)")
-                    } catch {
-                        let reverted = true
-                        launchAtLogin = reverted
-                        defaults.set(true, forKey: Keys.launchAtLogin)
-                        ZSLog("launchAtLogin OFF failed: \(error), status=\(status)")
-                    }
+                    defaults.set(true, forKey: Keys.launchAtLogin)
+                    ZSLog("launchAtLogin OFF failed: \(error), status=\(status)")
                 }
             }
         }
@@ -134,6 +154,19 @@ final class SettingsStore: ObservableObject {
 
     @Published var askSaveLocation: Bool {
         didSet { defaults.set(askSaveLocation, forKey: Keys.askSaveLocation) }
+    }
+
+    // MARK: - 截图
+
+    @Published var screenshotEnabled: Bool {
+        didSet {
+            defaults.set(screenshotEnabled, forKey: Keys.screenshotEnabled)
+            NotificationCenter.default.post(
+                name: GlobalHotkeyManager.screenshotEnabledDidChangeNotification,
+                object: nil,
+                userInfo: ["enabled": screenshotEnabled]
+            )
+        }
     }
 
     // MARK: - Dock
