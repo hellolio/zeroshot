@@ -4,11 +4,12 @@ import AppKit
 /// 覆盖在屏幕上的选区遮罩视图（SwiftUI）
 struct CaptureOverlayView: NSViewRepresentable {
     var screen: NSScreen
+    var background: NSImage?
     var onComplete: (CGRect) -> Void
     var onCancel: () -> Void
 
     func makeNSView(context: Context) -> NSView {
-        let view = CaptureOverlayNSView(screen: screen)
+        let view = CaptureOverlayNSView(screen: screen, background: background)
         view.onComplete = onComplete
         view.onCancel = onCancel
         view.setupTracking()
@@ -18,12 +19,15 @@ struct CaptureOverlayView: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
-/// 基于 NSView 的遮罩：绘制遮罩 + 选区矩形 + 尺寸提示
+/// 基于 NSView 的遮罩：绘制遮罩 + 选区矩形 + 尺寸提示。
+/// 背景默认透出 live 屏幕；传入 background 时改为绘制「热键瞬间的整屏预拍图」，
+/// 这样即便点击会让 live 弹出框消失，选区内仍能看到它并精确框选。
 final class CaptureOverlayNSView: NSView {
     var onComplete: ((CGRect) -> Void)?
     var onCancel: (() -> Void)?
 
     private let screen: NSScreen
+    private let backgroundImage: NSImage?
     private var startPoint: NSPoint?
     private var currentPoint: NSPoint?
 
@@ -33,8 +37,9 @@ final class CaptureOverlayNSView: NSView {
     private let dimColor = NSColor.black.withAlphaComponent(0.35)
     private let borderColor = NSColor.systemBlue
 
-    init(screen: NSScreen) {
+    init(screen: NSScreen, background: NSImage? = nil) {
         self.screen = screen
+        self.backgroundImage = background
         super.init(frame: screen.frame)
         self.wantsLayer = true
     }
@@ -116,18 +121,26 @@ final class CaptureOverlayNSView: NSView {
         super.draw(dirtyRect)
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
 
-        // 全屏遮罩
-        ctx.setFillColor(dimColor.cgColor)
-        ctx.fill(bounds)
+        // 背景：有预拍图时先画整屏冻结图，选区透出它而非 live 屏幕
+        if let backgroundImage {
+            backgroundImage.draw(in: bounds)
+        }
 
-        guard let start = startPoint, let current = currentPoint else { return }
+        guard let start = startPoint, let current = currentPoint else {
+            // 尚未开始选区：整屏遮罩
+            ctx.setFillColor(dimColor.cgColor)
+            ctx.fill(bounds)
+            return
+        }
         let sel = rect(from: start, to: current)
 
-        // 清除选区内遮罩（用 clear）
+        // 遮罩只盖住选区外（evenOdd 挖洞）：选区内透出背景（预拍图或 live 屏幕）
         ctx.saveGState()
-        ctx.setBlendMode(.clear)
-        ctx.setFillColor(NSColor.clear.cgColor)
-        ctx.fill(sel)
+        ctx.addPath(CGPath(rect: bounds, transform: nil))
+        ctx.addPath(CGPath(rect: sel, transform: nil))
+        ctx.clip(using: .evenOdd)
+        ctx.setFillColor(dimColor.cgColor)
+        ctx.fill(bounds)
         ctx.restoreGState()
 
         // 选区边框
@@ -156,12 +169,15 @@ final class CaptureOverlayNSView: NSView {
 }
 
 /// 单个屏幕的选区窗口
-final class CaptureOverlayWindow: NSWindow {
+/// 非激活面板：不夺走其他 app 的 active/key，热键+遮罩都不会关掉用户打开的弹出框；
+/// 键盘收不到（canBecomeKey=false），Esc 由 CaptureCoordinator 的全局监听处理。
+final class CaptureOverlayWindow: NSPanel {
     init(screen: NSScreen,
+         background: NSImage? = nil,
          onComplete: @escaping (CGRect) -> Void,
          onCancel: @escaping () -> Void) {
         super.init(contentRect: NSRect(origin: .zero, size: screen.frame.size),
-                   styleMask: .borderless, backing: .buffered, defer: false)
+                   styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         self.level = .screenSaver
         self.isOpaque = false
         self.backgroundColor = .clear
@@ -173,14 +189,14 @@ final class CaptureOverlayWindow: NSWindow {
         self.isReleasedWhenClosed = false
         self.setFrame(screen.frame, display: false)
 
-        let overlay = CaptureOverlayNSView(screen: screen)
+        let overlay = CaptureOverlayNSView(screen: screen, background: background)
         overlay.onComplete = onComplete
         overlay.onCancel = onCancel
         overlay.setupTracking()
         self.contentView = overlay
     }
 
-    /// 无边框窗口默认不能成为 key 窗口，导致收不到键盘事件（Esc 无效），必须放开
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
+    /// 面板永不成为 key/main，避免激活本 app 导致原 app 的弹出框被关闭
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
 }

@@ -31,6 +31,7 @@ struct EditorView: View {
     /// 马赛克临时涂抹
     @State private var tempMosaic: MosaicElement?
     @State private var mosaicRadius: CGFloat = 18
+    @State private var mosaicOverlayCache = MosaicOverlayCache()
 
     /// 元素拖动状态（气泡 / 形状）
     private enum ElementDragMode { case move, resize, anchor }
@@ -196,10 +197,12 @@ struct EditorView: View {
                        selected: b.id == selectedElementID)
         }
 
-        var mosaics: [MosaicElement] = []
-        if let temp = tempMosaic { mosaics.append(temp) }
-        for case .mosaic(let m) in doc.elements { mosaics.append(m) }
-        for mosaic in mosaics { drawMosaic(mosaic, context: context) }
+        if let temp = tempMosaic {
+            drawMosaic(temp, context: context)
+        }
+        for case .mosaic(let m) in doc.elements {
+            drawMosaic(m, context: context)
+        }
     }
 
     /// 图片在当前画布中等比居中后的绘制矩形
@@ -597,28 +600,21 @@ struct EditorView: View {
         }
     }
 
-    /// 马赛克涂抹绘制：在笔划包围盒内马赛克化原图，再裁剪到每个涂抹圆形区域
+    /// 马赛克涂抹绘制：整图像素化（网格对齐图片原点）后裁剪到每个涂抹圆形区域。
+    /// 临时笔划与已提交笔划共用同一张叠加图，保证预览、提交、导出的样式完全一致。
     private func drawMosaic(_ mosaic: MosaicElement, context: GraphicsContext) {
         guard let first = mosaic.points.first else { return }
         let r = mosaic.radius
-        var minX = first.x, maxX = first.x, minY = first.y, maxY = first.y
-        for p in mosaic.points.dropFirst() {
-            minX = min(minX, p.x); maxX = max(maxX, p.x)
-            minY = min(minY, p.y); maxY = max(maxY, p.y)
-        }
-        let bbox = CGRect(x: minX - r, y: minY - r,
-                          width: maxX - minX + r * 2, height: maxY - minY + r * 2)
-        guard let overlay = Self.pixelatedImage(doc.image, in: bbox, block: max(4, mosaic.radius * 0.5)) else { return }
-
         var mask = Path()
         for p in mosaic.points {
             let vp = toView(p)
             mask.addEllipse(in: CGRect(x: vp.x - r, y: vp.y - r, width: r * 2, height: r * 2))
         }
-        let viewBox = toViewRect(bbox)
+        guard let overlay = mosaicOverlayCache.fullOverlay(radius: mosaic.radius, source: doc.image) else { return }
+        let viewRect = toViewRect(CGRect(origin: .zero, size: doc.image.size))
         context.drawLayer { layer in
             layer.clip(to: mask)
-            layer.draw(Image(nsImage: overlay), in: viewBox)
+            layer.draw(Image(nsImage: overlay), in: viewRect)
         }
     }
 
@@ -652,17 +648,21 @@ struct EditorView: View {
 
         // 锚点圆点
         let dotRadius: CGFloat = isActive ? 4.5 : 3
+        let dotOutline = Path(ellipseIn: CGRect(x: anchor.x - dotRadius - 1, y: anchor.y - dotRadius - 1,
+                                                width: (dotRadius + 1) * 2, height: (dotRadius + 1) * 2))
         let dot = Path(ellipseIn: CGRect(x: anchor.x - dotRadius, y: anchor.y - dotRadius,
                                          width: dotRadius * 2, height: dotRadius * 2))
+        context.fill(dotOutline, with: .color(bubbleBorder))
         context.fill(dot, with: .color(isActive ? .accentColor : bubbleAccent))
         if isActive {
             context.stroke(dot, with: .color(Color.black.opacity(0.35)), lineWidth: 1)
         }
 
-        // 引线：锚点连到文本框底部边
+        // 引线：锚点连到文本框底部边（黑描边 + 白色主线）
         var line = Path()
         line.move(to: anchor)
         line.addLine(to: toView(bubble.lineEnd))
+        context.stroke(line, with: .color(bubbleBorder), style: StrokeStyle(lineWidth: 3.5))
         context.stroke(line, with: .color(bubbleAccent), style: StrokeStyle(lineWidth: 1.5))
 
         // 白色文本框（黑色文字）
@@ -1027,15 +1027,37 @@ struct EditorView: View {
 
     // MARK: - 导出
 
-    private func exportedImage() -> NSImage {
-        let size = doc.image.size
-        let canvas = NSImage(size: size)
-        canvas.lockFocus()
-        NSColor.black.setFill()
-        NSBezierPath(rect: NSRect(origin: .zero, size: size)).fill()
-        doc.image.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: 1)
+    /// 按原图尺寸重绘整张导出图（无视图依赖）。在后台线程调用（AppKit 离屏绘制线程安全）。
+    /// 画布按原图「原生像素」建位图（不再用 NSImage(size:)+lockFocus 的隐式像素密度），
+    /// 上下文按 pixelScale 缩放后复用点坐标绘制——保证导出 PNG 分辨率 = 屏幕原生分辨率。
+    private static func exportedImage(image: NSImage, elements: [CanvasElement]) -> NSImage {
+        guard let baseCG = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return image
+        }
+        let pixelScale = CGFloat(baseCG.width) / max(image.size.width, 1)
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil,
+                                         pixelsWide: baseCG.width,
+                                         pixelsHigh: baseCG.height,
+                                         bitsPerSample: 8,
+                                         samplesPerPixel: 4,
+                                         hasAlpha: true,
+                                         isPlanar: false,
+                                         colorSpaceName: .deviceRGB,
+                                         bytesPerRow: 0,
+                                         bitsPerPixel: 0),
+              let context = NSGraphicsContext(bitmapImageRep: rep) else {
+            return image
+        }
 
-        for element in doc.elements {
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        context.cgContext.scaleBy(x: pixelScale, y: pixelScale)
+
+        NSColor.black.setFill()
+        NSBezierPath(rect: NSRect(origin: .zero, size: image.size)).fill()
+        image.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: 1)
+
+        for element in elements {
             switch element {
             case .stroke(let s):
                 let path = NSBezierPath()
@@ -1060,24 +1082,52 @@ struct EditorView: View {
                 s.color.nsColor.setStroke()
                 path.stroke()
             case .mosaic(let m):
-                drawMosaicIntoCanvas(m)
+                drawMosaicIntoCanvas(m, image: image)
             }
         }
-        canvas.unlockFocus()
-        return canvas
+
+        context.flushGraphics()
+        NSGraphicsContext.restoreGraphicsState()
+
+        let result = NSImage(size: NSSize(width: baseCG.width, height: baseCG.height))
+        result.addRepresentation(rep)
+        ZSLog("export canvas: input=\(image.size.width)x\(image.size.height)pt baseCG=\(baseCG.width)x\(baseCG.height)px scale=\(pixelScale)")
+        return result
     }
 
-    private func drawBubbleIntoCanvas(_ bubble: BubbleElement) {
+    /// 后台渲染导出图 + PNG 编码，避免大图在主线程卡死 UI
+    private func encodeExportInBackground() async -> Data? {
+        let image = doc.image
+        let elements = doc.elements
+        return await Task.detached(priority: .userInitiated) {
+            let exported = Self.exportedImage(image: image, elements: elements)
+            guard let data = exported.pngData,
+                  let rep = NSBitmapImageRep(data: data) else {
+                ZSLog("export png encode failed")
+                return nil
+            }
+            ZSLog("export png: \(rep.pixelsWide)x\(rep.pixelsHigh)px data=\(data.count)")
+            return data
+        }.value
+    }
+
+    private static func drawBubbleIntoCanvas(_ bubble: BubbleElement) {
         let anchor = bubble.anchor
-        let box = bubble.box        // 锚点圆点
+        let box = bubble.box        // 锚点圆点（黑描边 + 白点）
+        let dotOutline = NSBezierPath(ovalIn: NSRect(x: anchor.x - 4, y: anchor.y - 4, width: 8, height: 8))
+        NSColor.black.withAlphaComponent(0.55).setFill()
+        dotOutline.fill()
         let dot = NSBezierPath(ovalIn: NSRect(x: anchor.x - 3, y: anchor.y - 3, width: 6, height: 6))
         NSColor.white.setFill()
         dot.fill()
 
-        // 引线
+        // 引线（黑描边 + 白色主线）
         let line = NSBezierPath()
         line.move(to: anchor)
         line.line(to: bubble.lineEnd)
+        line.lineWidth = 3.5
+        NSColor.black.withAlphaComponent(0.55).setStroke()
+        line.stroke()
         line.lineWidth = 1.5
         NSColor.white.setStroke()
         line.stroke()
@@ -1100,17 +1150,12 @@ struct EditorView: View {
         }
     }
 
-    private func drawMosaicIntoCanvas(_ mosaic: MosaicElement) {
+    private static func drawMosaicIntoCanvas(_ mosaic: MosaicElement, image: NSImage) {
         guard let first = mosaic.points.first else { return }
         let r = mosaic.radius
-        var minX = first.x, maxX = first.x, minY = first.y, maxY = first.y
-        for p in mosaic.points.dropFirst() {
-            minX = min(minX, p.x); maxX = max(maxX, p.x)
-            minY = min(minY, p.y); maxY = max(maxY, p.y)
-        }
-        let bbox = CGRect(x: minX - r, y: minY - r,
-                          width: maxX - minX + r * 2, height: maxY - minY + r * 2)
-        guard let overlay = Self.pixelatedImage(doc.image, in: bbox, block: max(4, mosaic.radius * 0.5)) else { return }
+        let fullRect = CGRect(origin: .zero, size: image.size)
+        guard let overlay = Self.pixelatedImage(image, in: fullRect,
+                                                block: max(4, mosaic.radius * 0.5)) else { return }
 
         let clip = NSBezierPath()
         for p in mosaic.points {
@@ -1118,7 +1163,7 @@ struct EditorView: View {
         }
         NSGraphicsContext.saveGraphicsState()
         clip.addClip()
-        overlay.draw(in: bbox, from: NSRect(origin: .zero, size: overlay.size),
+        overlay.draw(in: fullRect, from: NSRect(origin: .zero, size: overlay.size),
                      operation: .sourceOver, fraction: 1)
         NSGraphicsContext.restoreGraphicsState()
     }
@@ -1126,10 +1171,6 @@ struct EditorView: View {
     // MARK: - 下载 / 复制
 
     private func download() {
-        guard let data = exportedImage().pngData else {
-            presentAlert(title: "保存失败", message: "无法生成图片数据")
-            return
-        }
         let fm = FileManager.default
         let dirURL = URL(fileURLWithPath: settings.saveDirectory)
         try? fm.createDirectory(at: dirURL, withIntermediateDirectories: true)
@@ -1137,11 +1178,17 @@ struct EditorView: View {
         let name = Self.fileName()
 
         func write(to url: URL) {
-            do {
-                try data.write(to: url, options: .atomic)
-                SettingsStore.shared.lastSavedPath = url.path
-            } catch {
-                presentAlert(title: "保存失败", message: error.localizedDescription)
+            Task {
+                guard let data = await encodeExportInBackground() else {
+                    presentAlert(title: "保存失败", message: "无法生成图片数据")
+                    return
+                }
+                do {
+                    try data.write(to: url, options: .atomic)
+                    SettingsStore.shared.lastSavedPath = url.path
+                } catch {
+                    presentAlert(title: "保存失败", message: error.localizedDescription)
+                }
             }
         }
 
@@ -1167,13 +1214,19 @@ struct EditorView: View {
     }
 
     private func copyImage() {
-        let image = exportedImage()
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        if let data = image.pngData {
-            pb.setData(data, forType: .png)
-        } else {
-            pb.writeObjects([image])
+        Task {
+            let image = doc.image
+            let elements = doc.elements
+            let rendered = await Task.detached(priority: .userInitiated) {
+                Self.exportedImage(image: image, elements: elements)
+            }.value
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            if let data = rendered.pngData {
+                pb.setData(data, forType: .png)
+            } else {
+                pb.writeObjects([rendered])
+            }
         }
     }
 
@@ -1190,6 +1243,21 @@ struct EditorView: View {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "好的")
         alert.runModal()
+    }
+
+    /// 马赛克像素化叠加图缓存：同一半径的整图像素化只算一次，临时笔划与已提交笔划共用，
+    /// 保证预览与提交后的样式一致
+    private final class MosaicOverlayCache {
+        private var fullImages: [CGFloat: NSImage] = [:]
+
+        func fullOverlay(radius: CGFloat, source: NSImage) -> NSImage? {
+            if let cached = fullImages[radius] { return cached }
+            let fullRect = CGRect(origin: .zero, size: source.size)
+            guard let overlay = EditorView.pixelatedImage(source, in: fullRect,
+                                                          block: max(4, radius * 0.5)) else { return nil }
+            fullImages[radius] = overlay
+            return overlay
+        }
     }
 }
 

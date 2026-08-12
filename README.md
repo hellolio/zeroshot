@@ -5,8 +5,9 @@
 ## 功能
 
 - 全局快捷键 `⌘⇧S` 任意时刻截图，支持自定义快捷键
-- 框选截屏 + 画线、文字气泡标注 + 马赛克涂抹
+- 框选截屏 + 画线、矩形/圆框标注、文字气泡标注 + 马赛克涂抹
 - 撤销/重做
+- 单击 Dock 图标最小化窗口（可在设置中开启）
 
 ## 技术栈
 
@@ -31,7 +32,6 @@ zeroflow/
 │   ├── Views/                   # 设置页、选区遮罩、编辑页
 │   └── Services/                # 热键、截屏、编辑器协调、日志
 ├── 需求文档.md                  # 详细需求
-├── 项目介绍.md                  # 开发者介绍
 └── dist/                        # 构建产物副本
 ```
 
@@ -47,7 +47,7 @@ xcodebuild -project Zeroflow.xcodeproj -scheme Zeroflow \
 open build/Build/Products/Debug/Zeroflow.app
 ```
 
-> 新建源文件放入 `Zeroflow/` 目录即自动纳入编译，无需改 pbxproj。已有构建副本：`dist/Zeroflow.app`（arm64）。
+> 新建源文件放入 `Zeroflow/` 目录即自动纳入编译，无需改 pbxproj。
 
 ## License
 

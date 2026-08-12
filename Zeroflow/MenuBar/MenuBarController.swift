@@ -29,6 +29,14 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
             name: GlobalHotkeyManager.screenshotEnabledDidChangeNotification,
             object: nil
         )
+        // 屏幕配置变化（分辨率/显示接入）时让截图的 contentFilter 缓存失效重建
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            ScreenCapture.invalidateFilterCache()
+        }
 
         GlobalHotkeyManager.shared.setTriggerHandler {
             CaptureCoordinator.shared.startCapture()

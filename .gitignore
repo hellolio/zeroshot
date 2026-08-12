@@ -16,3 +16,4 @@ xcuserdata/
 # 日志与杂项
 *.log
 .env
+build-baseline/
