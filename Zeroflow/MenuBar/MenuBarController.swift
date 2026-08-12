@@ -47,6 +47,9 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         // Dock 单击最小化：按开关初始状态启停（开关变化由 DockClickMinimizer 自行监听恢复）
         DockClickMinimizer.shared.reapply()
 
+        // 窗口切换器：按开关初始状态启停（开关变化由 CommandTabSwitcher 自行监听恢复）
+        CommandTabSwitcher.shared.reapply()
+
         if ProcessInfo.processInfo.environment["ZEROFLOW_AUTO_CAPTURE"] == "1" {
             ZSLog("env ZEROFLOW_AUTO_CAPTURE: defer 1.5s then capture")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
@@ -63,6 +66,12 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
             ZSLog("env ZEROFLOW_DOCK_PROBE: defer 1s then dump dock AX tree")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 DockClickMinimizer.runProbe()
+            }
+        }
+        if ProcessInfo.processInfo.environment["ZEROFLOW_SWITCHER_DEBUG"] == "1" {
+            ZSLog("env ZEROFLOW_SWITCHER_DEBUG: defer 1s then dump window list")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                CommandTabSwitcher.runDebugProbe()
             }
         }
     }

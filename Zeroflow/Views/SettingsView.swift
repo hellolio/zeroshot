@@ -5,6 +5,7 @@ import AppKit
 enum SettingsTab: String, CaseIterable {
     case general = "通用"
     case screenshot = "截图"
+    case switcher = "切换"
     case dock = "Dock"
 }
 
@@ -28,6 +29,8 @@ struct SettingsView: View {
                 generalTab
             case .screenshot:
                 screenshotTab
+            case .switcher:
+                switcherTab
             case .dock:
                 dockTab
             }
@@ -61,7 +64,12 @@ struct SettingsView: View {
 
             Section {
                 LabeledContent("截屏快捷键") {
-                    ShortcutRecorderView(store: store)
+                    ShortcutRecorderView(
+                        shortcut: $store.shortcut,
+                        onSuspend: { GlobalHotkeyManager.shared.suspend() },
+                        onResume: { GlobalHotkeyManager.shared.resume() },
+                        resetToDefault: { store.resetShortcutToDefault() }
+                    )
                 }
             } header: {
                 Text("快捷键")
@@ -102,6 +110,65 @@ struct SettingsView: View {
         .formStyle(.grouped)
     }
 
+    // MARK: - 切换（⌘⇥ 窗口切换器）
+
+    private var switcherTab: some View {
+        Form {
+            Section {
+                Toggle("用 ⌘⇥ 显示窗口缩略图", isOn: $store.cmdTabSwitcherEnabled)
+                    .onChange(of: store.cmdTabSwitcherEnabled) { enabled in
+                        guard enabled else { return }
+                        if !AccessibilityPermission.isGranted {
+                            AccessibilityPermission.requestAuthorization()
+                        }
+                    }
+            } header: {
+                Text("启用")
+            } footer: {
+                Text("开启后，按下配置的组合键会弹出窗口缩略图切换器，可切换到最小化、同 app 多窗口、其他 Space 的窗口。关闭后完全恢复系统默认。")
+            }
+
+            if store.cmdTabSwitcherEnabled {
+                Section {
+                    Picker("切换快捷键", selection: $store.cmdTabShortcut) {
+                        Text("⌘⇥").tag(ShortcutKey.cmdTabDefault)
+                        Text("⌥`").tag(ShortcutKey.optionGraveDefault)
+                    }
+                    .pickerStyle(.radioGroup)
+                } header: {
+                    Text("快捷键")
+                } footer: {
+                    Text("选择其一弹出切换器：⌘⇥（Command + Tab）或 ⌥`（Option + Tab 上方的「`」键）。⇧ + 修饰键 + 主键 后退。")
+                }
+
+                Section {
+                    AccessibilityPermissionRow(message: "需要「辅助功能」权限才能接管 ⌘⇥ 切换")
+                    Text("该权限与 Dock 单击最小化共用，若已开启则此处直接显示绿色。")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } header: {
+                    Text("权限")
+                }
+
+                Section {
+                    Toggle("显示其他 Space 的窗口", isOn: $store.windowSwitcherAllSpaces)
+                    Toggle("显示无窗口的应用", isOn: $store.windowSwitcherShowWindowlessApps)
+                } header: {
+                    Text("选项")
+                } footer: {
+                    Text("关闭「显示其他 Space 的窗口」后只显示当前 Space 的窗口。开启「显示无窗口的应用」后，窗口全部关闭但仍在运行的应用也会显示（无缩略图时显示 app 图标）。")
+                }
+
+                Section {
+                    ScreenRecordingPermissionRow()
+                } header: {
+                    Text("屏幕录制权限")
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
     // MARK: - Dock
 
     private var dockTab: some View {
@@ -115,7 +182,7 @@ struct SettingsView: View {
                         }
                     }
                 if store.dockClickMinimize {
-                    DockPermissionRow()
+                    AccessibilityPermissionRow(message: "需要「辅助功能」权限才能最小化窗口")
                     LabeledContent("桌面与 Dock") {
                         Button("前往设置") {
                             NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Desktop-Settings.extension")!)
@@ -133,38 +200,7 @@ struct SettingsView: View {
     }
 }
 
-/// Dock 模块的辅助功能权限状态与引导
-private struct DockPermissionRow: View {
-    @State private var granted = AccessibilityPermission.isGranted
-
-    var body: some View {
-        Group {
-            if granted {
-                Label("辅助功能权限已开启", systemImage: "checkmark.circle.fill")
-                    .foregroundColor(.green)
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("需要「辅助功能」权限才能最小化窗口", systemImage: "exclamationmark.triangle.fill")
-                        .foregroundColor(.orange)
-                    HStack(spacing: 12) {
-                        Button("打开系统设置授权") {
-                            AccessibilityPermission.requestAuthorization()
-                        }
-                        Button("重新检测") {
-                            granted = AccessibilityPermission.isGranted
-                        }
-                    }
-                }
-            }
-        }
-        // 授权后回到应用自动重查
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            granted = AccessibilityPermission.isGranted
-        }
-    }
-}
-
-/// 截图模块的屏幕录制权限状态与引导（与 DockPermissionRow 样式一致）
+/// 截图模块的屏幕录制权限状态与引导（与 AccessibilityPermissionRow 样式一致）
 private struct ScreenRecordingPermissionRow: View {
     @State private var granted = ScreenRecordingPermission.isGranted
 

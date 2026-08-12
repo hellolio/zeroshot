@@ -14,6 +14,11 @@ final class SettingsStore: ObservableObject {
         static let askSaveLocation = "askSaveLocation"
         static let screenshotEnabled = "screenshotEnabled"
         static let dockClickMinimize = "dockClickMinimize"
+        static let cmdTabSwitcherEnabled = "cmdTabSwitcherEnabled"
+        static let windowSwitcherAllSpaces = "windowSwitcherAllSpaces"
+        static let windowSwitcherShowWindowlessApps = "windowSwitcherShowWindowlessApps"
+        static let cmdTabShortcutKeyCode = "cmdTabShortcut.keyCode"
+        static let cmdTabShortcutModifiers = "cmdTabShortcut.modifiers"
     }
 
     private let defaults: UserDefaults
@@ -33,13 +38,22 @@ final class SettingsStore: ObservableObject {
             Keys.askSaveLocation: false,
             Keys.screenshotEnabled: false,
             Keys.dockClickMinimize: false,
+            Keys.cmdTabSwitcherEnabled: false,
+            Keys.windowSwitcherAllSpaces: true,
+            Keys.windowSwitcherShowWindowlessApps: true,
+            Keys.cmdTabShortcutKeyCode: Int(ShortcutKey.cmdTabDefault.keyCode),
+            Keys.cmdTabShortcutModifiers: Int(ShortcutKey.cmdTabDefault.modifiers.rawValue),
         ])
         _launchAtLogin = Published(initialValue: defaults.bool(forKey: Keys.launchAtLogin))
         _saveDirectory = Published(initialValue: defaults.string(forKey: Keys.saveDirectory) ?? Self.defaultSaveDirectory)
         _askSaveLocation = Published(initialValue: defaults.bool(forKey: Keys.askSaveLocation))
         _screenshotEnabled = Published(initialValue: defaults.bool(forKey: Keys.screenshotEnabled))
         _dockClickMinimize = Published(initialValue: defaults.bool(forKey: Keys.dockClickMinimize))
+        _cmdTabSwitcherEnabled = Published(initialValue: defaults.bool(forKey: Keys.cmdTabSwitcherEnabled))
+        _windowSwitcherAllSpaces = Published(initialValue: defaults.bool(forKey: Keys.windowSwitcherAllSpaces))
+        _windowSwitcherShowWindowlessApps = Published(initialValue: defaults.bool(forKey: Keys.windowSwitcherShowWindowlessApps))
         _shortcut = Published(initialValue: Self.loadShortcut(from: defaults))
+        _cmdTabShortcut = Published(initialValue: Self.loadCmdTabShortcut(from: defaults))
         ensureDefaultDirectoryExists()
     }
 
@@ -58,12 +72,42 @@ final class SettingsStore: ObservableObject {
     }
 
     private static func loadShortcut(from defaults: UserDefaults) -> ShortcutKey {
-        let keyCode = UInt16(defaults.integer(forKey: Keys.shortcutKeyCode))
-        let modifiers = UInt(defaults.integer(forKey: Keys.shortcutModifiers))
-        if keyCode == 0 && defaults.object(forKey: Keys.shortcutKeyCode) == nil {
-            return .standard
+        loadShortcut(from: defaults,
+                     keyCodeKey: Keys.shortcutKeyCode,
+                     modifiersKey: Keys.shortcutModifiers,
+                     defaultKeyCode: ShortcutKey.standard.keyCode,
+                     defaultModifiers: UInt(ShortcutKey.standard.modifiers.rawValue),
+                     defaultCharacter: ShortcutKey.standard.character)
+    }
+
+    private static func loadCmdTabShortcut(from defaults: UserDefaults) -> ShortcutKey {
+        let loaded = loadShortcut(from: defaults,
+                                  keyCodeKey: Keys.cmdTabShortcutKeyCode,
+                                  modifiersKey: Keys.cmdTabShortcutModifiers,
+                                  defaultKeyCode: ShortcutKey.cmdTabDefault.keyCode,
+                                  defaultModifiers: UInt(ShortcutKey.cmdTabDefault.modifiers.rawValue),
+                                  defaultCharacter: ShortcutKey.cmdTabDefault.character)
+        // 切换器快捷键固定两选一（⌘⇥ / ⌥`）；旧的自由录制值钳回默认
+        switch loaded.keyCode {
+        case ShortcutKey.cmdTabDefault.keyCode: return .cmdTabDefault
+        case ShortcutKey.optionGraveDefault.keyCode: return .optionGraveDefault
+        default: return .cmdTabDefault
         }
-        var char = ShortcutKey.standard.character
+    }
+
+    private static func loadShortcut(from defaults: UserDefaults,
+                                     keyCodeKey: String,
+                                     modifiersKey: String,
+                                     defaultKeyCode: UInt16,
+                                     defaultModifiers: UInt,
+                                     defaultCharacter: String) -> ShortcutKey {
+        let keyCode = UInt16(defaults.integer(forKey: keyCodeKey))
+        let modifiers = UInt(defaults.integer(forKey: modifiersKey))
+        if keyCode == 0 && defaults.object(forKey: keyCodeKey) == nil {
+            return ShortcutKey(character: defaultCharacter, keyCode: defaultKeyCode,
+                               modifiers: NSEvent.ModifierFlags(rawValue: defaultModifiers))
+        }
+        var char = defaultCharacter
         if let mapped = character(forKeyCode: keyCode) {
             char = mapped
         }
@@ -178,6 +222,43 @@ final class SettingsStore: ObservableObject {
                 name: DockClickMinimizer.didChangeNotification,
                 object: nil,
                 userInfo: ["enabled": dockClickMinimize]
+            )
+        }
+    }
+
+    // MARK: - 窗口切换器
+
+    @Published var cmdTabSwitcherEnabled: Bool {
+        didSet {
+            defaults.set(cmdTabSwitcherEnabled, forKey: Keys.cmdTabSwitcherEnabled)
+            NotificationCenter.default.post(
+                name: CommandTabSwitcher.didChangeNotification,
+                object: nil,
+                userInfo: ["enabled": cmdTabSwitcherEnabled]
+            )
+        }
+    }
+
+    @Published var windowSwitcherAllSpaces: Bool {
+        didSet {
+            defaults.set(windowSwitcherAllSpaces, forKey: Keys.windowSwitcherAllSpaces)
+        }
+    }
+
+    @Published var windowSwitcherShowWindowlessApps: Bool {
+        didSet {
+            defaults.set(windowSwitcherShowWindowlessApps, forKey: Keys.windowSwitcherShowWindowlessApps)
+        }
+    }
+
+    @Published var cmdTabShortcut: ShortcutKey {
+        didSet {
+            defaults.set(Int(cmdTabShortcut.keyCode), forKey: Keys.cmdTabShortcutKeyCode)
+            defaults.set(Int(cmdTabShortcut.modifiers.rawValue), forKey: Keys.cmdTabShortcutModifiers)
+            NotificationCenter.default.post(
+                name: CommandTabSwitcher.shortcutDidChangeNotification,
+                object: nil,
+                userInfo: ["shortcut": cmdTabShortcut]
             )
         }
     }

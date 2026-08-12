@@ -1,9 +1,18 @@
 import SwiftUI
 import AppKit
 
-/// 快捷键录制区
+/// 快捷键录制区（截图页使用）。
+/// 通过注入 `Binding<ShortcutKey>` + `onSuspend/onResume` 闭包泛化：
+/// 录制期间挂起/恢复 `GlobalHotkeyManager`，避免按同一组合触发截图。
+/// （「切换」页的快捷键为固定两选一，不使用本组件。）
 struct ShortcutRecorderView: View {
-    @ObservedObject var store: SettingsStore
+    @Binding var shortcut: ShortcutKey
+    /// 录制期间临时挂起对应模块的全局热键（避免按同一组合触发自身）
+    var onSuspend: () -> Void
+    /// 录制结束（成功/取消/窗口关闭）后恢复
+    var onResume: () -> Void
+    /// 「恢复默认」按钮动作
+    var resetToDefault: () -> Void
     @State private var isRecording = false
     @State private var errorMessage: String?
     @State private var eventMonitor: Any?
@@ -18,9 +27,9 @@ struct ShortcutRecorderView: View {
                             .strokeBorder(isRecording ? Color.accentColor : Color(nsColor: .separatorColor),
                                           lineWidth: isRecording ? 1.5 : 1)
                     )
-                Text(isRecording ? "按下新快捷键…" : store.shortcut.displayString)
+                Text(isRecording ? "按下新快捷键…" : shortcut.displayString)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(isRecording ? Color.accentColor : (store.shortcut.isValid ? .primary : Color(nsColor: .secondaryLabelColor)))
+                    .foregroundStyle(isRecording ? Color.accentColor : (shortcut.isValid ? .primary : Color(nsColor: .secondaryLabelColor)))
                     .padding(.vertical, 5)
                     .padding(.horizontal, 12)
                     .allowsHitTesting(false)
@@ -33,7 +42,7 @@ struct ShortcutRecorderView: View {
             }
 
             Button("恢复默认") {
-                store.resetShortcutToDefault()
+                resetToDefault()
                 errorMessage = nil
             }
             .disabled(isRecording)
@@ -60,8 +69,8 @@ struct ShortcutRecorderView: View {
     }
 
     private func startListening() {
-        // 录制期间暂停全局热键，避免按相同组合键触发截图
-        GlobalHotkeyManager.shared.suspend()
+        // 录制期间暂停对应模块的全局热键，避免按相同组合键触发其行为
+        onSuspend()
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [self] event in
             guard isRecording else { return event }
             if event.keyCode == 53 { // Esc 取消录制
@@ -81,7 +90,7 @@ struct ShortcutRecorderView: View {
             errorMessage = "请至少按下一个修饰键（⌘/⌃/⌥/⇧）"
             return
         }
-        store.shortcut = newShortcut
+        shortcut = newShortcut
         errorMessage = nil
         stopRecording()
     }
@@ -92,7 +101,7 @@ struct ShortcutRecorderView: View {
             eventMonitor = nil
         }
         isRecording = false
-        // 恢复全局热键（录制中暂停了；此时 shortcut 已更新或保持原值，均以当前值重新注册）
-        GlobalHotkeyManager.shared.resume()
+        // 恢复对应模块的全局热键（录制中暂停了；此时 shortcut 已更新或保持原值，均以当前值重新注册）
+        onResume()
     }
 }

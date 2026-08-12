@@ -1,6 +1,6 @@
 # AGENTS.md
 
-macOS 截图菜单栏工具(截图 + 画线/矩形/圆框/文字气泡/马赛克 + 撤销重做 + Dock 单击最小化)。SwiftUI + AppKit,无第三方依赖,零测试/零 lint 目标。文档为中文: `README.md`(用户说明)、`需求文档.md`(需求与验收)、本文件(AI/开发者构建与架构速查)。
+macOS 截图菜单栏工具(截图 + 画线/矩形/圆框/文字气泡/马赛克 + 撤销重做 + Dock 单击最小化 + 内置 ⌘⇥ 窗口缩略图切换器)。SwiftUI + AppKit,无第三方依赖,零测试/零 lint 目标。文档为中文: `README.md`(用户说明)、`需求文档.md`(需求与验收)、`窗口切换器需求文档.md`(切换器模块需求)、本文件(AI/开发者构建与架构速查)。
 
 ## 构建与部署
 
@@ -35,6 +35,8 @@ open build/Build/Products/Release/Zeroflow.app
   - `ScreenCapture`: ScreenCaptureKit 截图; 按 displayID 缓存 `SCContentFilter`(屏幕参数变化通知里 `invalidateFilterCache()`)。
   - `CaptureCoordinator`: 权限→遮罩→捕获→编辑页 的协调器,`isActive` 防重入。
   - `DockClickMinimizer`: Dock 单击最小化(CGEventTap + AX),受 `dockClickMinimize` 开关控制。
+  - `CommandTabSwitcher`: 内置 ⌘⇥ 窗口缩略图切换器(CGEventTap + AX),受 `cmdTabSwitcherEnabled` 开关控制; 会话中 ⇥/⇧⇥/方向键移动选择, 悬停卡片可退出/关闭/最小化/全屏(`WindowOps`, 本 app 窗口走主线程 NSWindow)。
+  - `WindowList`: 窗口枚举(CGWindowList 公开 API)+ 幽灵窗口过滤 + 窗口级 MRU 排序 + 无窗口 app 占位卡(开关 `windowSwitcherShowWindowlessApps`, 排最后); `CGSWindowServer`: SkyLight/CGS 私有 API dlsym 桥(SLS 批量枚举 + 可见/全量成员列表 + Space 拓扑, 符号缺失退回公开 API); `PhantomWindowDetector`: 幽灵判定(对齐 AltTab cgsVerdict, 含 AX subrole 兜底); `WindowActivityTracker`: AX 焦点通知维护窗口级 MRU; `WindowThumbnailer`: SkyLight 私有 API(dlsym)抓缩略图 + 缓存/节流/降级; `WindowActivator`: AX 还原/前置/激活(本 app 窗口走主线程 makeKeyAndOrderFront, AX 后台线程会崩)。切换器模块完整需求见 `窗口切换器需求文档.md`。
   - `AccessibilityPermission` / `ScreenRecordingPermission`: 辅助功能 / 屏幕录制权限检测与申请。
   - `ZSLog`: 统一日志(stderr + `/tmp/zeroflow.log`)。
 - 编辑页就是 `Views/EditorView.swift`(单一 1300+ 行文件)。工具: `select / pencil(画线) / rect(矩形) / ellipse(圆框) / bubble(文字气泡) / mosaic(马赛克 半径 12/18/28)`。新增其他工具/图形也先加在这个文件。
@@ -73,4 +75,5 @@ open build/Build/Products/Release/Zeroflow.app
 | `ZEROFLOW_AUTO_CAPTURE=1` | 启动 1.5s 后自动触发一次截图流程 |
 | `ZEROFLOW_EDITOR_DEBUG=1` | 启动 1.5s 后直接打开编辑页(合成网格图),绕过截图 |
 | `ZEROFLOW_DOCK_PROBE=1` | 启动 1s 后 dump Dock 的 AX 布局到日志 |
+| `ZEROFLOW_SWITCHER_DEBUG=1` | 启动 1s 后 dump 一次窗口列表（数量、按 app 分组、是否含最小化窗口）+ 打印「⌘⇥ tap 是否已安装」到日志 |
 | `ZEROFLOW_FAKE_PERMISSION=1` | 跳过真实权限检测(视为已授权) |

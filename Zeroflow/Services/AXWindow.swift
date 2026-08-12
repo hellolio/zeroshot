@@ -1,0 +1,80 @@
+import AppKit
+import ApplicationServices
+
+/// 共享 AX 窗口匹配辅助：CGWindowID → AXUIElement。
+/// 首选私有桥 `_AXUIElementGetWindow` 精确匹配；不可用时退回 AX bounds 匹配（公开 API 兜底）。
+/// WindowActivator（激活）与 WindowOps（关闭/最小化/全屏）共用。
+enum AXWindow {
+    /// 返回 wid 对应的 AX 窗口元素；找不到返回 nil。
+    static func element(for wid: CGWindowID, pid: pid_t, bounds: CGRect? = nil) -> AXUIElement? {
+        let appElement = AXUIElementCreateApplication(pid)
+        guard let axWindows = copyElements(appElement, kAXWindowsAttribute) else { return nil }
+
+        // 首选：私有桥精确匹配 CGWindowID
+        for axWindow in axWindows {
+            var w: CGWindowID = 0
+            if _AXUIElementGetWindow(axWindow, &w) == .success, w == wid {
+                return axWindow
+            }
+        }
+
+        // 兜底：以 AX position+size 与 CGWindow bounds 匹配（不依赖私有 AX 桥）
+        if let bounds {
+            for axWindow in axWindows where axBoundsMatch(axWindow, target: bounds) {
+                return axWindow
+            }
+        }
+        return nil
+    }
+
+    /// 读取窗口的 AX subrole（对齐 AltTab WindowDiscriminator：真窗口 subrole 应为
+    /// AXStandardWindow 或 AXDialog；返回 nil = 没有可匹配的 AX 窗口实体 → 视为幽灵）。
+    static func subrole(for wid: CGWindowID, pid: pid_t) -> String? {
+        guard let axWindow = element(for: wid, pid: pid) else { return nil }
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(axWindow, kAXSubroleAttribute as CFString, &raw) == .success,
+              let subrole = raw as? String else { return nil }
+        return subrole
+    }
+
+    // MARK: - 辅助
+
+    private static func copyElements(_ element: AXUIElement, _ attribute: String) -> [AXUIElement]? {
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &raw) == .success,
+              let value = raw else { return nil }
+        return value as? [AXUIElement]
+    }
+
+    private static func copyValue<T>(_ element: AXUIElement, _ attribute: String, as _: T.Type) -> T? {
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &raw) == .success,
+              let value = raw else { return nil }
+        return value as? T
+    }
+
+    private static func point(_ element: AXUIElement, _ attribute: String) -> CGPoint? {
+        guard let value = copyValue(element, attribute, as: AXValue.self) else { return nil }
+        var point = CGPoint.zero
+        guard AXValueGetValue(value, .cgPoint, &point) else { return nil }
+        return point
+    }
+
+    private static func size(_ element: AXUIElement, _ attribute: String) -> CGSize? {
+        guard let value = copyValue(element, attribute, as: AXValue.self) else { return nil }
+        var size = CGSize.zero
+        guard AXValueGetValue(value, .cgSize, &size) else { return nil }
+        return size
+    }
+
+    private static func axBoundsMatch(_ axWindow: AXUIElement, target: CGRect) -> Bool {
+        guard let point = point(axWindow, kAXPositionAttribute),
+              let size = size(axWindow, kAXSizeAttribute) else { return false }
+        let bounds = CGRect(origin: point, size: size)
+        let tolerance: CGFloat = 12
+        return abs(bounds.minX - target.minX) <= tolerance
+            && abs(bounds.minY - target.minY) <= tolerance
+            && abs(bounds.width - target.width) <= tolerance
+            && abs(bounds.height - target.height) <= tolerance
+    }
+}
