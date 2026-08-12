@@ -648,17 +648,21 @@ struct EditorView: View {
 
         // 锚点圆点
         let dotRadius: CGFloat = isActive ? 4.5 : 3
+        let dotOutline = Path(ellipseIn: CGRect(x: anchor.x - dotRadius - 1, y: anchor.y - dotRadius - 1,
+                                                width: (dotRadius + 1) * 2, height: (dotRadius + 1) * 2))
         let dot = Path(ellipseIn: CGRect(x: anchor.x - dotRadius, y: anchor.y - dotRadius,
                                          width: dotRadius * 2, height: dotRadius * 2))
+        context.fill(dotOutline, with: .color(bubbleBorder))
         context.fill(dot, with: .color(isActive ? .accentColor : bubbleAccent))
         if isActive {
             context.stroke(dot, with: .color(Color.black.opacity(0.35)), lineWidth: 1)
         }
 
-        // 引线：锚点连到文本框底部边
+        // 引线：锚点连到文本框底部边（黑描边 + 白色主线）
         var line = Path()
         line.move(to: anchor)
         line.addLine(to: toView(bubble.lineEnd))
+        context.stroke(line, with: .color(bubbleBorder), style: StrokeStyle(lineWidth: 3.5))
         context.stroke(line, with: .color(bubbleAccent), style: StrokeStyle(lineWidth: 1.5))
 
         // 白色文本框（黑色文字）
@@ -1109,15 +1113,21 @@ struct EditorView: View {
 
     private static func drawBubbleIntoCanvas(_ bubble: BubbleElement) {
         let anchor = bubble.anchor
-        let box = bubble.box        // 锚点圆点
+        let box = bubble.box        // 锚点圆点（黑描边 + 白点）
+        let dotOutline = NSBezierPath(ovalIn: NSRect(x: anchor.x - 4, y: anchor.y - 4, width: 8, height: 8))
+        NSColor.black.withAlphaComponent(0.55).setFill()
+        dotOutline.fill()
         let dot = NSBezierPath(ovalIn: NSRect(x: anchor.x - 3, y: anchor.y - 3, width: 6, height: 6))
         NSColor.white.setFill()
         dot.fill()
 
-        // 引线
+        // 引线（黑描边 + 白色主线）
         let line = NSBezierPath()
         line.move(to: anchor)
         line.line(to: bubble.lineEnd)
+        line.lineWidth = 3.5
+        NSColor.black.withAlphaComponent(0.55).setStroke()
+        line.stroke()
         line.lineWidth = 1.5
         NSColor.white.setStroke()
         line.stroke()
