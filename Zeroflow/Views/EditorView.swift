@@ -1024,12 +1024,33 @@ struct EditorView: View {
     // MARK: - 导出
 
     /// 按原图尺寸重绘整张导出图（无视图依赖）。在后台线程调用（AppKit 离屏绘制线程安全）。
+    /// 画布按原图「原生像素」建位图（不再用 NSImage(size:)+lockFocus 的隐式像素密度），
+    /// 上下文按 pixelScale 缩放后复用点坐标绘制——保证导出 PNG 分辨率 = 屏幕原生分辨率。
     private static func exportedImage(image: NSImage, elements: [CanvasElement]) -> NSImage {
-        let size = image.size
-        let canvas = NSImage(size: size)
-        canvas.lockFocus()
+        guard let baseCG = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return image
+        }
+        let pixelScale = CGFloat(baseCG.width) / max(image.size.width, 1)
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil,
+                                         pixelsWide: baseCG.width,
+                                         pixelsHigh: baseCG.height,
+                                         bitsPerSample: 8,
+                                         samplesPerPixel: 4,
+                                         hasAlpha: true,
+                                         isPlanar: false,
+                                         colorSpaceName: .deviceRGB,
+                                         bytesPerRow: 0,
+                                         bitsPerPixel: 0),
+              let context = NSGraphicsContext(bitmapImageRep: rep) else {
+            return image
+        }
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        context.cgContext.scaleBy(x: pixelScale, y: pixelScale)
+
         NSColor.black.setFill()
-        NSBezierPath(rect: NSRect(origin: .zero, size: size)).fill()
+        NSBezierPath(rect: NSRect(origin: .zero, size: image.size)).fill()
         image.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: 1)
 
         for element in elements {
@@ -1060,8 +1081,14 @@ struct EditorView: View {
                 drawMosaicIntoCanvas(m, image: image)
             }
         }
-        canvas.unlockFocus()
-        return canvas
+
+        context.flushGraphics()
+        NSGraphicsContext.restoreGraphicsState()
+
+        let result = NSImage(size: NSSize(width: baseCG.width, height: baseCG.height))
+        result.addRepresentation(rep)
+        ZSLog("export canvas: input=\(image.size.width)x\(image.size.height)pt baseCG=\(baseCG.width)x\(baseCG.height)px scale=\(pixelScale)")
+        return result
     }
 
     /// 后台渲染导出图 + PNG 编码，避免大图在主线程卡死 UI
@@ -1069,7 +1096,14 @@ struct EditorView: View {
         let image = doc.image
         let elements = doc.elements
         return await Task.detached(priority: .userInitiated) {
-            Self.exportedImage(image: image, elements: elements).pngData
+            let exported = Self.exportedImage(image: image, elements: elements)
+            guard let data = exported.pngData,
+                  let rep = NSBitmapImageRep(data: data) else {
+                ZSLog("export png encode failed")
+                return nil
+            }
+            ZSLog("export png: \(rep.pixelsWide)x\(rep.pixelsHigh)px data=\(data.count)")
+            return data
         }.value
     }
 

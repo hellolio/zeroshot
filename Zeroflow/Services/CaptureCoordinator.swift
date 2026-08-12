@@ -10,6 +10,10 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 
     private var overlayWindows: [CaptureOverlayWindow] = []
     private var editorController: NSWindowController?
+    /// 各屏整屏预拍结果（选区完成时直接裁剪，避免弹出框被遮罩关闭后拍不到）
+    private var pendingCaptures: [ObjectIdentifier: DisplayCapture] = [:]
+    /// 选区期间的全局 Esc 监听（遮罩为非激活面板后无法走 key 窗口收键盘）
+    private var escMonitor: Any?
 
     private override init() {
         super.init()
@@ -29,19 +33,45 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         Task {
             // 用真实权限探测：与截图使用同一 ScreenCaptureKit API
             let granted = await ScreenRecordingPermission.hasScreenCaptureAccess()
-            await MainActor.run {
-                guard granted else {
-                    ZSLog("real permission check failed -> guide")
+            if !granted {
+                ZSLog("real permission check failed -> guide")
+                await MainActor.run {
                     self.isActive = false
                     self.presentPermissionGuide()
-                    return
                 }
+                return
+            }
+            // 先把各屏整屏预拍：此刻不激活本 app、不建任何窗口，用户的弹出框保持打开；
+            // 选区完成后从预拍图裁剪，保证截到弹出框内容。
+            let captures = await preCaptureAllScreens()
+            await MainActor.run {
+                self.pendingCaptures = captures
                 ZSLog("real permission OK -> create overlays")
                 // 进入截图的那一刻就把光标切成十字线
                 NSCursor.crosshair.set()
                 self.createOverlayWindows()
             }
         }
+    }
+
+    /// 并行预拍所有屏幕的整屏原生像素图
+    private func preCaptureAllScreens() async -> [ObjectIdentifier: DisplayCapture] {
+        let screens = NSScreen.screens
+        var result: [ObjectIdentifier: DisplayCapture] = [:]
+        await withTaskGroup(of: (Int, DisplayCapture?).self) { group in
+            for (index, screen) in screens.enumerated() {
+                group.addTask {
+                    (index, await ScreenCapture.captureFullDisplay(screen: screen))
+                }
+            }
+            for await (index, capture) in group {
+                if let capture {
+                    result[ObjectIdentifier(screens[index])] = capture
+                }
+            }
+        }
+        ZSLog("pre-captured \(result.count)/\(screens.count) screen(s)")
+        return result
     }
 
     // MARK: - 权限引导
@@ -55,14 +85,12 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     // MARK: - 覆盖层
 
     private func createOverlayWindows() {
-        // 首次截图时 app 可能尚未激活，键盘事件不会投递给遮罩的 key 窗口，
-        // 导致按 Esc 无法取消选区。进入选区前先激活本应用。
-        NSApp.activate(ignoringOtherApps: true)
         let screens = NSScreen.screens
         ZSLog("creating overlay for \(screens.count) screen(s)")
         overlayWindows = screens.map { screen in
             ZSLog("overlay window for screen \(screen.frame)")
-            let window = CaptureOverlayWindow(screen: screen) { [weak self] rect in
+            let window = CaptureOverlayWindow(screen: screen,
+                                              background: frozenImage(for: screen)) { [weak self] rect in
                 ZSLog("selection completed: \(rect) on screen frame \(screen.frame)")
                 self?.completeSelection(on: screen, rect: rect)
             } onCancel: { [weak self] in
@@ -72,21 +100,51 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             window.orderFrontRegardless()
             return window
         }
+        installEscMonitor()
+    }
 
-        // 把光标放置到最前面一个屏幕。若鼠标存在的屏幕优先。
-        if let mouseScreen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }),
-           let win = overlayWindows.first(where: { $0.screen?.frame == mouseScreen.frame }) {
-            win.makeKey()
+    /// 预拍图 → 选区遮罩背景用的 NSImage（点尺寸 = 原生像素 / 缩放系数）
+    private func frozenImage(for screen: NSScreen) -> NSImage? {
+        guard let capture = pendingCaptures[ObjectIdentifier(screen)] else { return nil }
+        return NSImage(cgImage: capture.cgImage,
+                       size: NSSize(width: CGFloat(capture.cgImage.width) / capture.pixelScale,
+                                    height: CGFloat(capture.cgImage.height) / capture.pixelScale))
+    }
+
+    /// 全局 Esc 监听：遮罩是非激活面板不再拥有 key 状态，键盘只能靠全局监听兜住
+    private func installEscMonitor() {
+        guard escMonitor == nil else { return }
+        escMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 53 else { return }
+            DispatchQueue.main.async {
+                self?.cancelSelection()
+            }
+        }
+    }
+
+    private func removeEscMonitor() {
+        if let monitor = escMonitor {
+            NSEvent.removeMonitor(monitor)
+            escMonitor = nil
         }
     }
 
     private func completeSelection(on screen: NSScreen, rect: CGRect) {
-        guard let window = overlayWindow(for: screen) else { return }
-        window.orderOut(nil)
+        overlayWindow(for: screen)?.orderOut(nil)
         isActive = false
+        let pending = pendingCaptures[ObjectIdentifier(screen)]
+        pendingCaptures = [:]
         teardownOverlays()
 
         Task {
+            // 优先从热键时的整屏预拍图裁剪（能截到当时的弹出框）
+            if let pending {
+                let image = ScreenCapture.crop(pending, on: screen, rect: rect)
+                ZSLog("crop OK size=\(image.size)")
+                await MainActor.run { self.openEditor(image: image) }
+                return
+            }
+            // 预拍缺失时回退实时捕获
             ZSLog("capturing screen=\(screen.frame) rect=\(rect)")
             guard let image = await ScreenCapture.capture(screen: screen, rect: rect) else {
                 ZSLog("capture returned nil")
@@ -108,6 +166,8 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     /// 延迟到下一轮事件循环再关闭遮罩窗口，避免在 keyDown/mouseUp 事件处理中
     /// close 正在派发事件的窗口导致释放后用崩溃（EXC_BAD_ACCESS）。
     private func teardownOverlays() {
+        removeEscMonitor()
+        pendingCaptures = [:]
         let windows = overlayWindows
         overlayWindows = []
         DispatchQueue.main.async {

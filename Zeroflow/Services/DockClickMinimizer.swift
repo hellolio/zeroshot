@@ -26,8 +26,10 @@ final class DockClickMinimizer {
     private static let dockItemRole = "AXApplicationDockItem"
     /// 点击点距屏幕边缘该宽度内才认为可能落在 Dock 上（事件路径预筛 VS 全量 AX 遍历）
     private static let edgeMargin: CGFloat = 200
-    /// 缓存命中时对 frame 的外扩容差
-    private static let cacheHitInset: CGFloat = 4
+    /// 缓存命中时对 frame 的外扩容差。
+    /// 必须为 0：一旦外扩，贴近图标上沿的 Dock 右键菜单项（落在膨胀带内）会被几何快路径
+    /// 误判为「点击图标」而吞掉。真实图标边缘的点击由 AX 权威命中测试兜底，不受影响。
+    private static let cacheHitInset: CGFloat = 0
     /// 兜底命中测试时向上找 dock 项的父级深度上限
     private static let parentWalkDepth = 8
 
@@ -451,10 +453,28 @@ final class DockClickMinimizer {
             if isDockItemElement(el) {
                 return appForDockItem(el)
             }
+            // 命中点落在 Dock 图标右键菜单/菜单项上：其祖先链上挂着 AXApplicationDockItem，
+            // 若放行会被误判成「单击图标」而最小化。遇到菜单元素一律视为非图标点击，放行。
+            if isMenuElement(el) {
+                return nil
+            }
             guard let parent = axParent(el) else { break }
             el = parent
         }
         return nil
+    }
+
+    /// 菜单类元素：Dock 图标右键弹出的菜单/菜单项（含「选项」子菜单）。
+    /// 点击落在这些元素上时，绝不触发 Dock 单击最小化。真实图标点击的祖先链不会经过菜单元素。
+    private func isMenuElement(_ el: AXUIElement) -> Bool {
+        let role = copyAXValue(el, kAXRoleAttribute, as: CFString.self) as String?
+        let subrole = copyAXValue(el, kAXSubroleAttribute, as: CFString.self) as String?
+        switch role ?? subrole {
+        case kAXMenuRole, kAXMenuItemRole, kAXMenuBarRole, kAXMenuBarItemRole:
+            return true
+        default:
+            return false
+        }
     }
 
     private func isDockItemElement(_ el: AXUIElement) -> Bool {
