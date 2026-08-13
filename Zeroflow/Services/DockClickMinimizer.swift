@@ -6,8 +6,12 @@ import CoreGraphics
 /// （聚焦窗口，取不到回退主窗口；聚焦窗口不可最小化时放行交给系统）。
 ///
 /// 实现要点：
-/// - 用 CGEventTap 监听左键 + AX 命中测试识别被点击的 Dock 项；成功后吞掉事件，
-///   避免 macOS「再点 Dock 图标即恢复」抵消最小化结果。
+/// - 用 CGEventTap 监听左键（按下/拖拽/抬起）+ AX 命中测试识别被点击的 Dock 项；
+///   命中前台可最小化 app 时按下即吞掉事件并登记候选。若按下→抬起在 quickClickMaxDuration
+///   （400ms）内（且未拖拽），视为快速单击：抬起时最小化并吞掉抬起，避免 macOS
+///   「再点 Dock 图标即恢复」抵消最小化结果。
+///   超过 400ms 仍按住（或发生拖拽）则把吞掉的按下以合成 mouseDown 交回系统，之后该手势
+///   完全交由系统处理（按住弹 Dock 菜单 / 拖动重排 / 慢点击），不再最小化。
 /// - 识别走两级：
 ///   1. 快路径：dock 项 frame 缓存（纯几何 contains，零 AX 调用），布局变化由
 ///      NSWorkspace 通知防抖重建；
@@ -30,6 +34,13 @@ final class DockClickMinimizer {
     /// 必须为 0：一旦外扩，贴近图标上沿的 Dock 右键菜单项（落在膨胀带内）会被几何快路径
     /// 误判为「点击图标」而吞掉。真实图标边缘的点击由 AX 权威命中测试兜底，不受影响。
     private static let cacheHitInset: CGFloat = 0
+    /// 判定「拖拽」的最小位移（pt）：按下后位移超过该值视为拖动 Dock 图标，取消最小化候选
+    private static let dragThreshold: CGFloat = 5
+    /// 判定「快速单击」的最大时长（s）：按下→抬起 ≤ 该值才触发最小化；
+    /// 超过则把吞掉的按下交回系统（按住菜单/拖拽/慢点击由系统处理）。
+    private static let quickClickMaxDuration: CFTimeInterval = 0.4
+    /// 拖拽时补发给 Dock 的合成 mouseDown 的 source userData 魔数，用于回调里识别并放行
+    private static let syntheticDownUserData: UInt64 = 0x5A5A_7A00_0000_0001
     /// 兜底命中测试时向上找 dock 项的父级深度上限
     private static let parentWalkDepth = 8
 
@@ -39,6 +50,19 @@ final class DockClickMinimizer {
     private weak var tapRunLoop: CFRunLoop?
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+
+    // MARK: - 单击候选（按下登记 → 快速抬起判定；超时/拖拽交回系统）
+
+    private struct PendingClick {
+        var app: NSRunningApplication
+        var downPoint: CGPoint
+        var downTime: CFTimeInterval
+    }
+
+    /// 按下时登记的疑似单击候选。事件回调在 tap 线程串行执行，无需加锁。
+    private var pendingClick: PendingClick?
+    /// 超时交接定时器（挂 tap 线程 runloop，回调也在该线程，无并发问题）。
+    private var handOverTimer: CFRunLoopTimer?
 
     // MARK: - Dock 项缓存
 
@@ -204,7 +228,11 @@ final class DockClickMinimizer {
     }
 
     private func installTap(in runLoop: CFRunLoop) {
-        let mask = CGEventMask(1 << CGEventType.leftMouseDown.rawValue)
+        let mask = CGEventMask(
+            (1 << CGEventType.leftMouseDown.rawValue)
+            | (1 << CGEventType.leftMouseDragged.rawValue)
+            | (1 << CGEventType.leftMouseUp.rawValue)
+        )
         guard let tap = CGEvent.tapCreate(
             tap: .cghidEventTap,
             place: .headInsertEventTap,
@@ -264,6 +292,12 @@ final class DockClickMinimizer {
         guard let info else { return }
         let minimizer = Unmanaged<DockClickMinimizer>.fromOpaque(info).takeUnretainedValue()
         minimizer.retryCreateTapIfNeeded()
+    }
+
+    private static let handOverTimerCallback: @convention(c) (CFRunLoopTimer?, UnsafeMutableRawPointer?) -> Void = { timer, info in
+        guard let info, let timer else { return }
+        let minimizer = Unmanaged<DockClickMinimizer>.fromOpaque(info).takeUnretainedValue()
+        minimizer.handOverTimerDidFire(timer)
     }
 
     // MARK: - 独立诊断探针（ZEROFLOW_DOCK_PROBE=1 启动时执行）
@@ -381,41 +415,169 @@ final class DockClickMinimizer {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return Unmanaged.passUnretained(event)
         }
-        guard type == .leftMouseDown else { return Unmanaged.passUnretained(event) }
         guard SettingsStore.shared.dockClickMinimize else { return Unmanaged.passUnretained(event) }
         // 未授权辅助功能时静默跳过，不做任何处理
         guard AccessibilityPermission.isGranted else { return Unmanaged.passUnretained(event) }
 
+        switch type {
+        case .leftMouseDown:
+            return handleMouseDown(event)
+        case .leftMouseDragged:
+            return handleMouseDragged(event)
+        case .leftMouseUp:
+            return handleMouseUp(event)
+        default:
+            return Unmanaged.passUnretained(event)
+        }
+    }
+
+    /// 按下：命中前台可最小化 app 时吞掉该事件并登记候选；
+    /// 抬起时若期间未发生拖拽（纯单击）则最小化，发生拖拽则在拖拽分支补发合成按下给 Dock。
+    private func handleMouseDown(_ event: CGEvent) -> Unmanaged<CGEvent>? {
+        // 我们自己补发的合成 mouseDown：直接放行，不做识别也不吞
+        if event.getIntegerValueField(.eventSourceUserData) == Int64(Self.syntheticDownUserData) {
+            return Unmanaged.passUnretained(event)
+        }
         // option/control 点击让系统手势（App Exposé / 右键菜单）通过，不吞
         let flags = event.flags
         if flags.contains(.maskAlternate) || flags.contains(.maskControl) {
+            pendingClick = nil
             return Unmanaged.passUnretained(event)
         }
 
         let point = event.location
-        guard isNearDockEdge(point) else { return Unmanaged.passUnretained(event) }
+        guard isNearDockEdge(point) else {
+            pendingClick = nil
+            return Unmanaged.passUnretained(event)
+        }
 
         guard let app = appFromDockItem(at: point) else {
+            pendingClick = nil
             logThrottled("DockClickMinimizer: edge click at \(point) hit no dock app item")
             return Unmanaged.passUnretained(event)
         }
         guard let frontmost = NSWorkspace.shared.frontmostApplication else {
+            pendingClick = nil
             ZSLog("DockClickMinimizer: dock item app but no frontmost app")
             return Unmanaged.passUnretained(event)
         }
         guard app.processIdentifier == frontmost.processIdentifier else {
+            pendingClick = nil
             ZSLog("DockClickMinimizer: dock app '\(app.localizedName ?? "?")' != frontmost '\(frontmost.localizedName ?? "?")', skip")
             return Unmanaged.passUnretained(event)
         }
 
         // 已全屏 / 无可见窗口时不吞，交给系统默认行为（含「再点即恢复」）
         guard shouldMinimize(app) else {
+            pendingClick = nil
             ZSLog("DockClickMinimizer: matched '\(app.localizedName ?? "?")' but no minimizable window (all minimized/fullscreen?)")
             return Unmanaged.passUnretained(event)
         }
 
-        ZSLog("DockClickMinimizer: minimized \(app.localizedName ?? "?"), swallowed event")
-        // 吞掉该次点击，避免系统「再点 Dock 图标即恢复」抵消最小化；
+        pendingClick = PendingClick(app: app, downPoint: point, downTime: CFAbsoluteTimeGetCurrent())
+        // 吞掉按下：Dock 收不到该单击，避免长按弹右键菜单、也不会「再点即恢复」抵消最小化
+        startHandOverTimer()
+        return nil
+    }
+
+    /// 启动超时交接定时器：按下超过 quickClickMaxDuration 仍未抬起 → 把吞掉的按下交回系统。
+    private func startHandOverTimer() {
+        cancelHandOverTimer()
+        guard let runLoop = CFRunLoopGetCurrent() else { return }
+        var ctx = CFRunLoopTimerContext(
+            version: 0,
+            info: Unmanaged.passUnretained(self).toOpaque(),
+            retain: nil,
+            release: nil,
+            copyDescription: nil
+        )
+        let timer = CFRunLoopTimerCreate(
+            kCFAllocatorDefault,
+            CFAbsoluteTimeGetCurrent() + Self.quickClickMaxDuration,
+            0,
+            0,
+            0,
+            Self.handOverTimerCallback,
+            &ctx
+        )
+        if let timer {
+            handOverTimer = timer
+            CFRunLoopAddTimer(runLoop, timer, .commonModes)
+        }
+    }
+
+    private func cancelHandOverTimer() {
+        if let timer = handOverTimer {
+            CFRunLoopTimerInvalidate(timer)
+            handOverTimer = nil
+        }
+    }
+
+    private func handOverTimerDidFire(_ timer: CFRunLoopTimer) {
+        // 候选已被抬起/拖拽/取消时（timer 可能已失效）直接忽略
+        guard let pending = pendingClick else {
+            cancelHandOverTimer()
+            return
+        }
+        // 按住未动：位置与按下点一致，用 downPoint 交接（保持左上原点坐标系，避免坐标换算）
+        handOverToSystem(at: pending.downPoint)
+    }
+
+    /// 超时交接：仍按着（未抬起也未拖拽）超过 quickClickMaxDuration，
+    /// 清除候选并把吞掉的按下以合成 mouseDown 交回系统，之后该手势全归系统处理。
+    private func handOverToSystem(at point: CGPoint) {
+        guard pendingClick != nil else { return }
+        pendingClick = nil
+        cancelHandOverTimer()
+        postSyntheticMouseDown(at: point)
+    }
+
+    /// 拖拽：位移超过阈值视为拖动 Dock 图标，取消候选，并向 Dock 补发合成 mouseDown
+    /// （Dock 收到 down 后，后续放行的真实 dragged/up 即构成一次完整拖拽手势，图标重排正常）。
+    private func handleMouseDragged(_ event: CGEvent) -> Unmanaged<CGEvent>? {
+        guard let pending = pendingClick else { return Unmanaged.passUnretained(event) }
+        let point = event.location
+        if max(abs(point.x - pending.downPoint.x), abs(point.y - pending.downPoint.y)) > Self.dragThreshold {
+            cancelHandOverTimer()
+            pendingClick = nil
+            postSyntheticMouseDown(at: point)
+        }
+        return Unmanaged.passUnretained(event)
+    }
+
+    /// 补发一个合成 leftMouseDown 到 HID 事件流，让 Dock 由此开始拖拽跟踪。
+    /// source 带上魔数 userData，回调据此放行，避免把该合成事件当成新单击吞掉。
+    private func postSyntheticMouseDown(at point: CGPoint) {
+        guard let source = CGEventSource(stateID: .hidSystemState) else { return }
+        source.userData = Int64(Self.syntheticDownUserData)
+        let synthetic = CGEvent(
+            mouseEventSource: source,
+            mouseType: .leftMouseDown,
+            mouseCursorPosition: point,
+            mouseButton: .left
+        )
+        synthetic?.post(tap: .cghidEventTap)
+        ZSLog("DockClickMinimizer: drag detected, replayed synthetic mouseDown at \(point)")
+    }
+
+    /// 抬起：候选仍在且为快速单击（≤ quickClickMaxDuration）才最小化并吞掉抬起；
+    /// 超时已被交回系统 / 拖拽被取消则放行，由系统完成该手势。
+    private func handleMouseUp(_ event: CGEvent) -> Unmanaged<CGEvent>? {
+        guard let pending = pendingClick else { return Unmanaged.passUnretained(event) }
+        defer { cancelHandOverTimer() }
+        let app = pending.app
+
+        let elapsed = CFAbsoluteTimeGetCurrent() - pending.downTime
+        guard elapsed <= Self.quickClickMaxDuration else {
+            // 超过 400ms 离开：不算快速单击，不再最小化（此时按下已由定时器交回系统，放行）
+            pendingClick = nil
+            ZSLog("DockClickMinimizer: slow release (\(Int(elapsed * 1000))ms) of '\(app.localizedName ?? "?")', handing back to system")
+            return Unmanaged.passUnretained(event)
+        }
+
+        pendingClick = nil
+        ZSLog("DockClickMinimizer: minimized \(app.localizedName ?? "?"), swallowed mouseUp")
+        // 吞掉该次抬起，避免系统「再点 Dock 图标即恢复」抵消最小化；
         // 最小化动作异步执行，事件回调保持轻量
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             _ = self?.minimizeFrontmostAppWindows(app)

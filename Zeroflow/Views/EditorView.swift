@@ -782,11 +782,11 @@ struct EditorView: View {
     private var toolbar: some View {
         HStack(spacing: 10) {
             HStack(spacing: 2) {
-                toolButton(systemImage: "arrow.uturn.backward", tip: "撤回 (⌘Z)", disabled: !doc.canUndo) {
+                toolButton(systemImage: "arrow.uturn.backward", tip: L10n.tr("撤回 (⌘Z)"), disabled: !doc.canUndo) {
                     commitAnyPendingEdit()
                     doc.undo()
                 }
-                toolButton(systemImage: "arrow.uturn.forward", tip: "重做 (⇧⌘Z)", disabled: !doc.canRedo) {
+                toolButton(systemImage: "arrow.uturn.forward", tip: L10n.tr("重做 (⇧⌘Z)"), disabled: !doc.canRedo) {
                     commitAnyPendingEdit()
                     doc.redo()
                 }
@@ -795,15 +795,15 @@ struct EditorView: View {
             Divider().frame(height: 14)
 
             HStack(spacing: 2) {
-                toolButton(systemImage: "pencil", tip: "画线 (L)", highlighted: activeTool == .pencil) {
+                toolButton(systemImage: "pencil", tip: L10n.tr("画线 (L)"), highlighted: activeTool == .pencil) {
                     commitAnyPendingEdit()
                     activeTool = activeTool == .pencil ? .select : .pencil
                 }
-                toolButton(systemImage: "rectangle", tip: "矩形标注", highlighted: activeTool == .rect) {
+                toolButton(systemImage: "rectangle", tip: L10n.tr("矩形标注"), highlighted: activeTool == .rect) {
                     commitAnyPendingEdit()
                     activeTool = activeTool == .rect ? .select : .rect
                 }
-                toolButton(systemImage: "circle", tip: "圆框标注", highlighted: activeTool == .ellipse) {
+                toolButton(systemImage: "circle", tip: L10n.tr("圆框标注"), highlighted: activeTool == .ellipse) {
                     commitAnyPendingEdit()
                     activeTool = activeTool == .ellipse ? .select : .ellipse
                 }
@@ -826,15 +826,15 @@ struct EditorView: View {
                     .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
             )
 
-            toolButton(systemImage: "text.bubble.fill", tip: "标注 (T)", highlighted: activeTool == .bubble) {
+            toolButton(systemImage: "text.bubble.fill", tip: L10n.tr("标注 (T)"), highlighted: activeTool == .bubble) {
                 commitAnyPendingEdit()
                 activeTool = activeTool == .bubble ? .select : .bubble
             }
 
             HStack(alignment: .center, spacing: 4) {
-                mosaicToolButton(radius: 12, cell: 3, diameter: 14, tip: "马赛克 小")
-                mosaicToolButton(radius: 18, cell: 4, diameter: 18, tip: "马赛克 中")
-                mosaicToolButton(radius: 28, cell: 5.6, diameter: 21, tip: "马赛克 大")
+                mosaicToolButton(radius: 12, cell: 3, diameter: 14, tip: L10n.tr("马赛克 小"))
+                mosaicToolButton(radius: 18, cell: 4, diameter: 18, tip: L10n.tr("马赛克 中"))
+                mosaicToolButton(radius: 28, cell: 5.6, diameter: 21, tip: L10n.tr("马赛克 大"))
             }
             .padding(2)
             .background(
@@ -849,11 +849,11 @@ struct EditorView: View {
             Spacer(minLength: 8)
 
             HStack(spacing: 2) {
-                toolButton(systemImage: "arrow.down.to.line", tip: "下载保存 (⌘S)") {
+                toolButton(systemImage: "arrow.down.to.line", tip: L10n.tr("下载保存 (⌘S)")) {
                     commitAnyPendingEdit()
                     download()
                 }
-                toolButton(systemImage: "doc.on.doc", tip: "复制 (⌘C)") {
+                toolButton(systemImage: "doc.on.doc", tip: L10n.tr("复制 (⌘C)")) {
                     commitAnyPendingEdit()
                     copyImage()
                 }
@@ -920,7 +920,7 @@ struct EditorView: View {
             .background(Color(nsColor: .windowBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
-        .help("粗细")
+        .help(L10n.tr("粗细"))
     }
 
     /// 马赛克工具按钮：圆形马赛克图标，整体尺寸随 `diameter` 递增体现 小/中/大；点击设置半径并切换工具
@@ -997,7 +997,7 @@ struct EditorView: View {
             .padding(8)
             .background(Color(nsColor: .windowBackgroundColor))
         }
-        .help("画笔颜色")
+        .help(L10n.tr("画笔颜色"))
     }
 
         private func commitAnyPendingEdit() {
@@ -1180,14 +1180,14 @@ struct EditorView: View {
         func write(to url: URL) {
             Task {
                 guard let data = await encodeExportInBackground() else {
-                    presentAlert(title: "保存失败", message: "无法生成图片数据")
+                    presentAlert(title: L10n.tr("保存失败"), message: L10n.tr("无法生成图片数据"))
                     return
                 }
                 do {
                     try data.write(to: url, options: .atomic)
                     SettingsStore.shared.lastSavedPath = url.path
                 } catch {
-                    presentAlert(title: "保存失败", message: error.localizedDescription)
+                    presentAlert(title: L10n.tr("保存失败"), message: error.localizedDescription)
                 }
             }
         }
@@ -1241,7 +1241,7 @@ struct EditorView: View {
         alert.messageText = title
         alert.informativeText = message
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "好的")
+        alert.addButton(withTitle: L10n.tr("好的"))
         alert.runModal()
     }
 

@@ -1,15 +1,27 @@
 import SwiftUI
 import AppKit
 
-struct ShortcutKey: Equatable {
+struct ShortcutKey: Hashable {
     var character: String
     var keyCode: UInt16
     var modifiers: NSEvent.ModifierFlags
 
     static let standard = ShortcutKey(character: "s", keyCode: 1, modifiers: [.command, .shift])
 
+    /// 窗口切换器默认快捷键：⌘⇥（Command + Tab，kVK_Tab = 48）
+    static let cmdTabDefault = ShortcutKey(character: "tab", keyCode: 48, modifiers: [.command])
+
+    /// 窗口切换器备选快捷键：⌥`（Option + Tab 上方的「`」键，kVK_ANSI_Grave = 50）
+    static let optionGraveDefault = ShortcutKey(character: "`", keyCode: 50, modifiers: [.option])
+
     var isValid: Bool {
         !modifiers.isEmpty && !character.isEmpty
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(character)
+        hasher.combine(keyCode)
+        hasher.combine(modifiers.rawValue)
     }
 
     var displayString: String {
@@ -18,7 +30,8 @@ struct ShortcutKey: Equatable {
         if modifiers.contains(.option) { parts.append("⌥") }
         if modifiers.contains(.shift) { parts.append("⇧") }
         if modifiers.contains(.command) { parts.append("⌘") }
-        if !character.isEmpty { parts.append(character.uppercased()) }
+        if keyCode == 48 { parts.append("⇥") }
+        else if !character.isEmpty { parts.append(character.uppercased()) }
         return parts.joined()
     }
 

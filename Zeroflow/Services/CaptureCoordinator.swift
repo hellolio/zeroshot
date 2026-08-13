@@ -183,10 +183,10 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 
     private func presentCaptureError() {
         let alert = NSAlert()
-        alert.messageText = "截图失败"
-        alert.informativeText = "无法捕获所选区域，请检查屏幕录制权限后重试。"
+        alert.messageText = L10n.tr("截图失败")
+        alert.informativeText = L10n.tr("无法捕获所选区域，请检查屏幕录制权限后重试。")
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "好的")
+        alert.addButton(withTitle: L10n.tr("好的"))
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
     }
@@ -233,7 +233,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         ))
 
         let window = NSWindow(contentViewController: hosting)
-        window.title = "zeroflow 截图"
+        window.title = L10n.tr("zeroflow 截图")
         window.styleMask = styleMask
         window.isRestorable = false
         window.delegate = self
