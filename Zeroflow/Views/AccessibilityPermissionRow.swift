@@ -12,17 +12,17 @@ struct AccessibilityPermissionRow: View {
     var body: some View {
         Group {
             if granted {
-                Label("辅助功能权限已开启", systemImage: "checkmark.circle.fill")
+                Label(L10n.tr("辅助功能权限已开启"), systemImage: "checkmark.circle.fill")
                     .foregroundColor(.green)
             } else {
                 VStack(alignment: .leading, spacing: 8) {
                     Label(message, systemImage: "exclamationmark.triangle.fill")
                         .foregroundColor(.orange)
                     HStack(spacing: 12) {
-                        Button("打开系统设置授权") {
+                        Button(L10n.tr("打开系统设置授权")) {
                             AccessibilityPermission.requestAuthorization()
                         }
-                        Button("重新检测") {
+                        Button(L10n.tr("重新检测")) {
                             granted = AccessibilityPermission.isGranted
                         }
                     }

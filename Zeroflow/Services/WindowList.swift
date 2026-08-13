@@ -24,8 +24,7 @@ struct SwitcherWindow: Identifiable {
 ///   保留最小化/离屏窗口（正是系统 ⌘⇥ 切不到的）。
 /// - 幽灵过滤：CGS 可用时用 `PhantomWindowDetector`（对齐 AltTab）精确剔除；不可用退回启发式。
 /// - 排序：窗口级 MRU（最近激活在前，见 `WindowActivityTracker`），保证默认选中「上一个窗口」。
-/// - Space 过滤：默认列出所有 Space；`windowSwitcherAllSpaces == false` 时尽力而为
-///   只列当前 Space（以 `kCGWindowWorkspace` 与前台 app 的 onscreen 窗口 space 对比）。
+/// - Space：总是列出所有 Space 的窗口（不做空间过滤；选中其他 Space 窗口时自动切 Space）。
 final class WindowList {
     static let shared = WindowList()
 
@@ -111,13 +110,7 @@ final class WindowList {
             raws.append(r)
         }
 
-        // Space 过滤（默认列出所有 Space；关闭时尽力而为）
-        if !SettingsStore.shared.windowSwitcherAllSpaces {
-            if let current = currentWorkspaceID(in: rawInfo) {
-                raws = raws.filter { $0.workspace == current || $0.workspace < 0 }
-            }
-        }
-
+        // 总是列出所有 Space 的窗口（不做事空间过滤；旧版「显示其他 Space 的窗口」开关已删除）。
         // CGS 幽灵判定（对齐 AltTab PhantomWindowDetector）：可用时精确剔除 alpha=0/orderOut:
         // Electron、微信/Teams 隐藏窗口、以及 WindowServer 伴生影子记录（Chrome/微信 的空卡）；
         // CGS 不可用时退回上面第 99 行的启发式过滤。
@@ -267,6 +260,19 @@ final class WindowList {
         }
 
         let tracker = WindowActivityTracker.shared
+        // CGWindowList 返回顺序 ≈ 全局 z 序（前置在前）；记录每个 pid 最顶层的 onscreen 窗口，
+        // 作为该 pid 窗口无 MRU 记录时的兜底顺序（当前窗口一般在顶层）。
+        var frontWindowByPid: [pid_t: CGWindowID] = [:]
+        for r in raws where r.isOnscreen {
+            if frontWindowByPid[r.ownerPID] == nil { frontWindowByPid[r.ownerPID] = r.id }
+        }
+        // 前台窗口强制记最新活跃：对齐 AltTab「聚焦窗口永远是最近激活」。这是确定性的 index0 = 当前窗口
+        // 修复——若某窗口带着旧日期（全屏/跨 Space 下 noteFocus 曾遗漏等），日期比较会压过前台性，
+        // 导致当前窗口排不到第一张卡。此处直接把它升为最新，从根上消除。
+        if let frontmostPID, let currentID = frontWindowByPid[frontmostPID] {
+            tracker.noteFocus(wid: currentID)
+        }
+
         result.sort { a, b in
             // 无窗口占位卡一律排在所有真实窗口之后
             if a.isWindowlessApp != b.isWindowlessApp { return !a.isWindowlessApp }
@@ -278,7 +284,20 @@ final class WindowList {
             let ra = rank[a.pid] ?? Int.max
             let rb = rank[b.pid] ?? Int.max
             if ra != rb { return ra < rb }
+            let aIsFront = frontWindowByPid[a.pid] == a.id
+            let bIsFront = frontWindowByPid[b.pid] == b.id
+            if aIsFront != bIsFront { return aIsFront }
             return a.id < b.id
+        }
+
+        if ProcessInfo.processInfo.environment["ZEROFLOW_SWITCHER_DEBUG"] == "1" {
+            let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            let frontIDs = result.prefix(5).map { w in
+                let hasDate = tracker.lastActiveDate(for: w.id) != nil
+                let isCurrent = frontmostPID != nil && frontWindowByPid[frontmostPID!] == w.id
+                return "\(w.appName)/\(String(w.id)) date=\(hasDate) current=\(isCurrent)"
+            }
+            ZSLog("SWITCHER-DEBUG sorted order → [\(frontIDs.joined(separator: ", "))]")
         }
         return result
     }
@@ -330,23 +349,5 @@ final class WindowList {
         }
         // 无 UI 的后台守护进程不进列表
         return app.activationPolicy == .prohibited
-    }
-
-    /// 当前活跃 Space（尽力而为）：取前台 app 第一个 onscreen 窗口的 workspace
-    private func currentWorkspaceID(in rawInfo: [[String: Any]]) -> Int? {
-        guard let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return nil }
-        let wanted = frontmostPID
-        for dict in rawInfo {
-            let pid = (dict[kCGWindowOwnerPID as String] as? NSNumber)?.intValue
-                ?? (dict[kCGWindowOwnerPID as String] as? Int ?? -1)
-            if pid != wanted { continue }
-            guard (dict[kCGWindowLayer as String] as? NSNumber)?.intValue
-                ?? (dict[kCGWindowLayer as String] as? Int ?? -1) == 0 else { continue }
-            guard (dict[kCGWindowIsOnscreen as String] as? Bool) ?? false else { continue }
-            if let ws = (dict["kCGWindowWorkspace"] as? NSNumber)?.intValue {
-                return ws
-            }
-        }
-        return nil
     }
 }

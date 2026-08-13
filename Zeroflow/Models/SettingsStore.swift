@@ -15,10 +15,10 @@ final class SettingsStore: ObservableObject {
         static let screenshotEnabled = "screenshotEnabled"
         static let dockClickMinimize = "dockClickMinimize"
         static let cmdTabSwitcherEnabled = "cmdTabSwitcherEnabled"
-        static let windowSwitcherAllSpaces = "windowSwitcherAllSpaces"
         static let windowSwitcherShowWindowlessApps = "windowSwitcherShowWindowlessApps"
         static let cmdTabShortcutKeyCode = "cmdTabShortcut.keyCode"
         static let cmdTabShortcutModifiers = "cmdTabShortcut.modifiers"
+        static let appLanguage = "appLanguage"
     }
 
     private let defaults: UserDefaults
@@ -39,7 +39,6 @@ final class SettingsStore: ObservableObject {
             Keys.screenshotEnabled: false,
             Keys.dockClickMinimize: false,
             Keys.cmdTabSwitcherEnabled: false,
-            Keys.windowSwitcherAllSpaces: true,
             Keys.windowSwitcherShowWindowlessApps: true,
             Keys.cmdTabShortcutKeyCode: Int(ShortcutKey.cmdTabDefault.keyCode),
             Keys.cmdTabShortcutModifiers: Int(ShortcutKey.cmdTabDefault.modifiers.rawValue),
@@ -50,10 +49,10 @@ final class SettingsStore: ObservableObject {
         _screenshotEnabled = Published(initialValue: defaults.bool(forKey: Keys.screenshotEnabled))
         _dockClickMinimize = Published(initialValue: defaults.bool(forKey: Keys.dockClickMinimize))
         _cmdTabSwitcherEnabled = Published(initialValue: defaults.bool(forKey: Keys.cmdTabSwitcherEnabled))
-        _windowSwitcherAllSpaces = Published(initialValue: defaults.bool(forKey: Keys.windowSwitcherAllSpaces))
         _windowSwitcherShowWindowlessApps = Published(initialValue: defaults.bool(forKey: Keys.windowSwitcherShowWindowlessApps))
         _shortcut = Published(initialValue: Self.loadShortcut(from: defaults))
         _cmdTabShortcut = Published(initialValue: Self.loadCmdTabShortcut(from: defaults))
+        _appLanguage = Published(initialValue: AppLanguage(rawValue: defaults.string(forKey: Keys.appLanguage) ?? "") ?? .system)
         ensureDefaultDirectoryExists()
     }
 
@@ -239,12 +238,6 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    @Published var windowSwitcherAllSpaces: Bool {
-        didSet {
-            defaults.set(windowSwitcherAllSpaces, forKey: Keys.windowSwitcherAllSpaces)
-        }
-    }
-
     @Published var windowSwitcherShowWindowlessApps: Bool {
         didSet {
             defaults.set(windowSwitcherShowWindowlessApps, forKey: Keys.windowSwitcherShowWindowlessApps)
@@ -260,6 +253,15 @@ final class SettingsStore: ObservableObject {
                 object: nil,
                 userInfo: ["shortcut": cmdTabShortcut]
             )
+        }
+    }
+
+    // MARK: - 语言
+
+    @Published var appLanguage: AppLanguage {
+        didSet {
+            defaults.set(appLanguage.rawValue, forKey: Keys.appLanguage)
+            NotificationCenter.default.post(name: L10n.didChangeNotification, object: nil)
         }
     }
 

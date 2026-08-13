@@ -29,6 +29,12 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
             name: GlobalHotkeyManager.screenshotEnabledDidChangeNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(languageDidChange),
+            name: L10n.didChangeNotification,
+            object: nil
+        )
         // 屏幕配置变化（分辨率/显示接入）时让截图的 contentFilter 缓存失效重建
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
@@ -83,11 +89,16 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
             accessibilityDescription: "zeroflow"
         )
         item.button?.imagePosition = .imageOnly
+        statusItem = item
+        rebuildMenu()
+    }
 
+    private func rebuildMenu() {
+        guard let item = statusItem else { return }
         let menu = NSMenu()
 
         let captureItem = NSMenuItem(
-            title: "立即截图（\(SettingsStore.shared.shortcut.displayString)）",
+            title: L10n.tr("立即截图（%@）", arguments: SettingsStore.shared.shortcut.displayString),
             action: #selector(startScreenshot), keyEquivalent: ""
         )
         captureItem.target = self
@@ -95,23 +106,23 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         self.captureItem = captureItem
         menu.addItem(captureItem)
 
-        let settingsItem = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
+        let settingsItem = NSMenuItem(title: L10n.tr("设置…"), action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
 
         if SettingsStore.shared.lastSavedPath != nil {
-            let recentItem = NSMenuItem(title: "打开最近截图", action: #selector(openRecent), keyEquivalent: "")
+            let recentItem = NSMenuItem(title: L10n.tr("打开最近截图"), action: #selector(openRecent), keyEquivalent: "")
             recentItem.target = self
             menu.addItem(recentItem)
         }
 
         menu.addItem(.separator())
-        let quitItem = NSMenuItem(title: "退出 zeroflow", action: #selector(quit), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: L10n.tr("退出 zeroflow"), action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
         item.menu = menu
-        statusItem = item
+        settingsWindowController?.window?.title = L10n.tr("zeroflow 设置")
     }
 
     @objc private func startScreenshot() {
@@ -121,6 +132,10 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
     @objc private func screenshotEnabledDidChange(_ notification: Notification) {
         let enabled = (notification.userInfo?["enabled"] as? Bool) ?? SettingsStore.shared.screenshotEnabled
         captureItem?.isEnabled = enabled
+    }
+
+    @objc private func languageDidChange() {
+        rebuildMenu()
     }
 
     @objc private func openRecent() {
@@ -133,7 +148,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
             let window = NSWindow(
                 contentViewController: NSHostingController(rootView: SettingsView())
             )
-            window.title = "zeroflow 设置"
+            window.title = L10n.tr("zeroflow 设置")
             window.setContentSize(NSSize(width: 560, height: 640))
             window.styleMask = [.titled, .closable]
             window.isReleasedWhenClosed = false

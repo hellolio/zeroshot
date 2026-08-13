@@ -31,8 +31,11 @@ final class CommandTabSwitcher {
 
     private var sessionActive = false
     private var sessionGeneration = 0
-    /// 相对默认选中位（index 1，即上一个 app）的偏移；⇥ +1 / ⇧⇥ -1
-    private var selectionOffset = 0
+    /// 绝对选中下标（0..count-1）；前进/后退环绕（末尾→开头、开头→末尾）。
+    private var selectionIndex = 0
+    /// Shift 是否处于按下状态：由 flagsChanged 显式跟踪。
+    /// 比直接从 keyDown 的 flags 判 shift 更可靠（HID 级 tap 上 keyDown flags 偶发滞后）。
+    private var shiftHeld = false
 
     /// 面板与展示模型（仅主线程访问）
     private var panel: WindowSwitcherPanel?
@@ -94,6 +97,7 @@ final class CommandTabSwitcher {
         isRunning = false
         let wasActive = sessionActive
         sessionActive = false
+        selectionIndex = 0
         let runLoop = tapRunLoop
         let source = runLoopSource
         let tap = eventTap
@@ -220,7 +224,11 @@ final class CommandTabSwitcher {
         let flags = event.flags
         let keyCode = keyCode(of: event)
         let isConfigKey = keyCode == shortcut.keyCode && hasConfigModifiers(shortcut, flags)
-        let isBackward = flags.contains(.maskShift) && !shortcut.modifiers.contains(.shift)
+        let isBackward = (shiftHeld || flags.contains(.maskShift)) && !shortcut.modifiers.contains(.shift)
+
+        if isConfigKey || isSessionActive() {
+            debugLog("TAP keyDown keyCode=\(keyCode) flags=0x\(String(flags.rawValue, radix: 16)) shiftHeld=\(shiftHeld) session=\(isSessionActive()) backward=\(isBackward)")
+        }
 
         if isConfigKey {
             if isSessionActive() {
@@ -236,7 +244,7 @@ final class CommandTabSwitcher {
                 cancelSession()
                 return nil
             }
-            // 方向键：左/右 ±1，上/下 ±一行（行宽 = min(tiles, 6)，与面板列数一致）
+            // 方向键：左/右 环绕 ±1；上/下 ±一行（行宽 = min(tiles, 6)，与面板列数一致）
             switch keyCode {
             case 123: moveSelectionArrow(dx: -1, dy: 0); return nil
             case 124: moveSelectionArrow(dx: 1, dy: 0); return nil
@@ -260,9 +268,11 @@ final class CommandTabSwitcher {
     }
 
     private func handleFlagsChanged(_ event: CGEvent, _ shortcut: ShortcutKey) -> Unmanaged<CGEvent>? {
+        shiftHeld = event.flags.contains(.maskShift)
         if isSessionActive() {
             if !hasConfigModifiers(shortcut, event.flags) {
                 // 配置修饰键抬起 → 激活选中窗口
+                debugLog("TAP flagsChanged activate sessionActive=true flags=0x\(String(event.flags.rawValue, radix: 16))")
                 activateSelected()
                 return nil
             }
@@ -279,6 +289,13 @@ final class CommandTabSwitcher {
         if modifiers.contains(.control), !flags.contains(.maskControl) { return false }
         if modifiers.contains(.shift), !flags.contains(.maskShift) { return false }
         return true
+    }
+
+    /// ZEROFLOW_SWITCHER_DEBUG=1 时输出事件级日志
+    private func debugLog(_ message: String) {
+        if ProcessInfo.processInfo.environment["ZEROFLOW_SWITCHER_DEBUG"] == "1" {
+            ZSLog(message)
+        }
     }
 
     // MARK: - 会话
@@ -299,10 +316,11 @@ final class CommandTabSwitcher {
         lock.lock()
         sessionActive = true
         sessionGeneration += 1
-        selectionOffset = backward ? -1 : 0
+        // 默认选中：前进 → index 1（上一个窗口）；后退 → index 0（当前窗口）
+        selectionIndex = backward ? 0 : 1
         let generation = sessionGeneration
         lock.unlock()
-        ZSLog("CommandTabSwitcher: session begin gen=\(generation)")
+        ZSLog("CommandTabSwitcher: session begin gen=\(generation) backward=\(backward)")
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let windows = WindowList.shared.enumerate()
@@ -327,8 +345,8 @@ final class CommandTabSwitcher {
         model.tiles = windows
         let count = windows.count
         lock.lock()
-        selectionOffset = Self.clampedOffset(selectionOffset, count: count)
-        let index = 1 + selectionOffset
+        selectionIndex = Self.wrappedIndex(selectionIndex, count: count)
+        let index = selectionIndex
         lock.unlock()
         model.selectedIndex = index
 
@@ -336,8 +354,10 @@ final class CommandTabSwitcher {
         let present = { [weak self] in
             guard let self, !didPresent, self.isSessionLive(generation) else { return }
             didPresent = true
-            self.ensurePanel().centerOnMouseScreen()
-            self.ensurePanel().orderFront(nil)
+            let panel = self.ensurePanel()
+            panel.centerOnMouseScreen()
+            panel.orderFront(nil)
+            self.assertPanelVisible(panel, generation: generation)
         }
 
         WindowThumbnailer.shared.fetchThumbnails(for: windows.filter { !$0.isWindowlessApp }) { [weak self] images in
@@ -347,24 +367,37 @@ final class CommandTabSwitcher {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self else { return }
+            _ = self
             present()
         }
     }
 
+    /// 全屏 Space 下面板偶发不显示（FR-20.5 复检）：orderFront 后延迟复检，
+    /// 不可见则重新 orderFront（避开全屏过渡未完成时的窗口服务器竞态）。
+    private func assertPanelVisible(_ panel: WindowSwitcherPanel, generation: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+            guard let self, self.isSessionLive(generation) else { return }
+            if !panel.isVisible {
+                ZSLog("CommandTabSwitcher: panel not visible after orderFront, re-ordering")
+                panel.orderFront(nil)
+                panel.order(.above, relativeTo: 0)
+            }
+        }
+    }
+
     /// 按 delta 移动选择（delta 以选中格计；任意线程可调用，UI 更新统一落主线程）。
-    /// 关键：offset 也要 clamp 到 [-1, count-2]，否则按到边缘后 offset 越界累积，
-    /// 反向按键要按很多次才恢复（实测「左方向键偶发失灵」的根因）。
+    /// 绝对下标 + 环绕：到末尾再前进回到开头，到开头再后退回到末尾。
     private func moveSelection(by delta: Int) {
         lock.lock()
         guard sessionActive else { lock.unlock(); return }
-        selectionOffset += delta
+        selectionIndex += delta
         lock.unlock()
         DispatchQueue.main.async { [weak self] in
             self?.applySelection()
         }
     }
 
-    /// 方向键移动（主线程）：左右 ±1；上下移动到相邻行里「渲染位置」最接近当前窗口的窗口
+    /// 方向键移动（主线程）：左右 ±1（环绕）；上下移动到相邻行里「渲染位置」最接近当前窗口的窗口
     /// （末行不满时会居中显示，因此按渲染列（含居中偏移）比较横向距离，而不是按行内原始列号——
     /// 这样从任意列按↓/↑ 最多横向偏 1 列，不会跳到远端）。没有相邻行则原地不动。
     private func moveSelectionArrow(dx: Int, dy: Int) {
@@ -404,27 +437,30 @@ final class CommandTabSwitcher {
                 if dist < bestDist { bestDist = dist; best = idx }
             }
             self.lock.lock()
-            self.selectionOffset = Self.clampedOffset(best - 1, count: count)
+            self.selectionIndex = best
             self.lock.unlock()
             model.selectedIndex = best
         }
     }
 
-    /// 主线程：把 offset clamp 到有效范围并刷新选中下标（tiles 空时直接返回）。
+    /// 主线程：把选中下标环绕到 [0, count-1] 并刷新（tiles 空时直接返回）。
     private func applySelection() {
         guard let model = self.model else { return }
         let count = model.tiles.count
         guard count > 0 else { return }
         lock.lock()
-        selectionOffset = Self.clampedOffset(selectionOffset, count: count)
-        let index = 1 + selectionOffset
+        selectionIndex = Self.wrappedIndex(selectionIndex, count: count)
+        let index = selectionIndex
         lock.unlock()
         model.selectedIndex = index
     }
 
-    /// offset 有效范围：index = 1 + offset ∈ [0, count-1] → offset ∈ [-1, count-2]（count ≥ 1）
-    private static func clampedOffset(_ offset: Int, count: Int) -> Int {
-        Self.clamped(offset, -1, count - 2)
+    /// 绝对下标环绕到 [0, count-1]（count ≤ 0 时原样返回）
+    private static func wrappedIndex(_ index: Int, count: Int) -> Int {
+        guard count > 0 else { return index }
+        var i = index % count
+        if i < 0 { i += count }
+        return i
     }
 
     private func activateSelected() {
@@ -528,10 +564,6 @@ final class CommandTabSwitcher {
                 model.selectedIndex = model.tiles.count - 1
             }
         })
-    }
-
-    private static func clamped(_ value: Int, _ lower: Int, _ upper: Int) -> Int {
-        min(max(value, lower), upper)
     }
 
     // MARK: - 独立诊断探针（ZEROFLOW_SWITCHER_DEBUG=1 启动时执行）

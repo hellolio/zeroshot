@@ -27,6 +27,14 @@ final class WindowActivityTracker {
         return activity[wid]
     }
 
+    /// 记录窗口最近激活时间（MRU）。AX 焦点通知是异步的，快速连按 ⌘⇥ 时可能尚未落库，
+    /// 因此切换器激活成功后会同步调用本方法补记，保证下一次枚举 index0 = 刚激活的窗口。
+    func noteFocus(wid: CGWindowID) {
+        lock.lock()
+        activity[wid] = Date()
+        lock.unlock()
+    }
+
     // MARK: - 生命周期
 
     private func observeLifecycle() {
@@ -86,11 +94,5 @@ final class WindowActivityTracker {
         if let observer {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
         }
-    }
-
-    private func noteFocus(wid: CGWindowID) {
-        lock.lock()
-        activity[wid] = Date()
-        lock.unlock()
     }
 }

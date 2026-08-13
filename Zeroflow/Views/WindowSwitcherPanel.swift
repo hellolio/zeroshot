@@ -45,12 +45,12 @@ struct SwitcherTileView: View {
                 if isHovered {
                     HStack(spacing: 4) {
                         if tile.isWindowlessApp {
-                            TileActionButton(symbol: "power", title: "退出应用", fill: .purple) { onAction(.quitApp) }
+                            TileActionButton(symbol: "power", title: L10n.tr("退出应用"), fill: .purple) { onAction(.quitApp) }
                         } else {
-                            TileActionButton(symbol: "power", title: "退出应用", fill: .purple) { onAction(.quitApp) }
-                            TileActionButton(symbol: "xmark", title: "关闭窗口", fill: .red) { onAction(.close) }
-                            TileActionButton(symbol: "minus", title: "最小化", fill: .yellow, symbolColor: .black) { onAction(.minimize) }
-                            TileActionButton(symbol: "arrow.up.left.and.arrow.down.right", title: "全屏切换", fill: .green) { onAction(.maximize) }
+                            TileActionButton(symbol: "power", title: L10n.tr("退出应用"), fill: .purple) { onAction(.quitApp) }
+                            TileActionButton(symbol: "xmark", title: L10n.tr("关闭窗口"), fill: .red) { onAction(.close) }
+                            TileActionButton(symbol: "minus", title: L10n.tr("最小化"), fill: .yellow, symbolColor: .black) { onAction(.minimize) }
+                            TileActionButton(symbol: "arrow.up.left.and.arrow.down.right", title: L10n.tr("全屏切换"), fill: .green) { onAction(.maximize) }
                         }
                         Spacer()
                     }
@@ -86,13 +86,16 @@ struct SwitcherTileView: View {
     }
 }
 
-/// 缩略图左上角的圆形操作按钮（系统红绿灯样式：直径 12pt，退出紫 / 关闭红 / 最小化黄 / 全屏绿）
+/// 缩略图左上角的圆形操作按钮（系统红绿灯样式：直径 12pt，退出紫 / 关闭红 / 最小化黄 / 全屏绿）。
+/// 悬停时仅当前按钮轻微放大（spring 动画）。
 private struct TileActionButton: View {
     let symbol: String
     let title: String
     let fill: Color
     var symbolColor: Color = .white
     var action: () -> Void
+
+    @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
@@ -104,6 +107,12 @@ private struct TileActionButton: View {
         }
         .buttonStyle(.plain)
         .help(title)
+        .scaleEffect(hovering ? 1.28 : 1.0)
+        .shadow(color: .black.opacity(hovering ? 0.35 : 0), radius: hovering ? 2 : 0, y: hovering ? 1 : 0)
+        .animation(.spring(response: 0.2, dampingFraction: 0.6), value: hovering)
+        .onHover { over in
+            hovering = over
+        }
     }
 }
 

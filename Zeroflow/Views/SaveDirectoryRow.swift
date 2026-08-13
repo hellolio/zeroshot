@@ -16,10 +16,10 @@ struct SaveDirectoryRow: View {
                 .textSelection(.enabled)
 
             HStack {
-                Button("选择…") {
+                Button(L10n.tr("选择…")) {
                     chooseDirectory()
                 }
-                Button("打开") {
+                Button(L10n.tr("打开")) {
                     NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: store.saveDirectory)
                 }
 
@@ -37,7 +37,7 @@ struct SaveDirectoryRow: View {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.prompt = "选择"
+        panel.prompt = L10n.tr("选择")
         panel.directoryURL = URL(fileURLWithPath: store.saveDirectory)
         panel.begin { response in
             if response == .OK, let url = panel.url {
@@ -49,7 +49,7 @@ struct SaveDirectoryRow: View {
                     store.saveDirectory = newPath
                     toastMessage = nil
                 } catch {
-                    toastMessage = "目录创建失败，请重试"
+                    toastMessage = L10n.tr("目录创建失败，请重试")
                 }
             }
         }

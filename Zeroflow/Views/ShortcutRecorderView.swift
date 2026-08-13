@@ -27,7 +27,7 @@ struct ShortcutRecorderView: View {
                             .strokeBorder(isRecording ? Color.accentColor : Color(nsColor: .separatorColor),
                                           lineWidth: isRecording ? 1.5 : 1)
                     )
-                Text(isRecording ? "按下新快捷键…" : shortcut.displayString)
+                Text(isRecording ? L10n.tr("按下新快捷键…") : shortcut.displayString)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(isRecording ? Color.accentColor : (shortcut.isValid ? .primary : Color(nsColor: .secondaryLabelColor)))
                     .padding(.vertical, 5)
@@ -41,7 +41,7 @@ struct ShortcutRecorderView: View {
                 toggleRecording()
             }
 
-            Button("恢复默认") {
+            Button(L10n.tr("恢复默认")) {
                 resetToDefault()
                 errorMessage = nil
             }
@@ -87,7 +87,7 @@ struct ShortcutRecorderView: View {
     private func capturePressed(keyCode: UInt16, character: String, modifiers: NSEvent.ModifierFlags) {
         let newShortcut = ShortcutKey(character: character, keyCode: keyCode, modifiers: modifiers)
         if !newShortcut.isValid {
-            errorMessage = "请至少按下一个修饰键（⌘/⌃/⌥/⇧）"
+            errorMessage = L10n.tr("请至少按下一个修饰键（⌘/⌃/⌥/⇧）")
             return
         }
         shortcut = newShortcut
