@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import FinderSync
 
 /// 设置页标签页
 enum SettingsTab: String, CaseIterable {
@@ -7,6 +8,7 @@ enum SettingsTab: String, CaseIterable {
     case screenshot = "截图"
     case switcher = "切换"
     case dock = "Dock"
+    case finder = "右键菜单"
 
     var title: String { L10n.tr(rawValue) }
 }
@@ -35,6 +37,8 @@ struct SettingsView: View {
                 switcherTab
             case .dock:
                 dockTab
+            case .finder:
+                finderTab
             }
         }
         .frame(minWidth: 520, minHeight: 560)
@@ -179,6 +183,43 @@ struct SettingsView: View {
         .formStyle(.grouped)
     }
 
+    // MARK: - 访达新建文件
+
+    private var finderTab: some View {
+        Form {
+            Section {
+                Toggle(L10n.tr("在访达右键菜单中显示「新建空文件」"), isOn: $store.finderNewFileEnabled)
+            } header: {
+                Text(L10n.tr("启用"))
+            } footer: {
+                Text(L10n.tr("开启后，在「访达」窗口或桌面的用户目录内点按右键即可新建空文件；关闭后 Finder 不监控任何目录，完全无副作用。"))
+            }
+
+            if store.finderNewFileEnabled {
+                Section {
+                    LabeledContent(L10n.tr("新文件名")) {
+                        TextField(L10n.tr("默认文件名"), text: $store.finderNewFileName)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 220)
+                    }
+                } header: {
+                    Text(L10n.tr("文件名"))
+                } footer: {
+                    Text(L10n.tr("包含扩展名，如 new file.md。名称已存在时自动追加数字（new file 1.md、new file 2.md…）。"))
+                }
+
+                Section {
+                    FinderSyncPermissionRow()
+                } header: {
+                    Text(L10n.tr("访达扩展"))
+                } footer: {
+                    Text(L10n.tr("首次使用需在系统中启用扩展；扩展启用后，菜单出现在用户目录（含桌面）内的任意位置。"))
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
     // MARK: - Dock
 
     private var dockTab: some View {
@@ -250,6 +291,52 @@ private struct ScreenRecordingPermissionRow: View {
         Task { @MainActor in
             granted = await ScreenRecordingPermission.hasScreenCaptureAccess()
         }
+    }
+}
+
+/// 访达扩展的启用状态与引导（与 ScreenRecordingPermissionRow 样式一致）
+private struct FinderSyncPermissionRow: View {
+    @State private var enabled = FIFinderSyncController.isExtensionEnabled
+
+    var body: some View {
+        Group {
+            if enabled {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(L10n.tr("访达扩展已启用"), systemImage: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                    // 陈旧实例自愈：macOS Sequoia/Tahoe 下扩展更新后可能「已启用但右键菜单不出现」，
+                    // 此按钮复现系统设置里的「关闭→打开」，强制 pkd 重载扩展实例。
+                    Button(L10n.tr("刷新右键菜单扩展")) {
+                        FinderSyncReloader.reloadIfNeeded(force: true) { _ in
+                            DispatchQueue.main.async {
+                                recheck()
+                            }
+                        }
+                    }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(L10n.tr("尚未在系统中启用访达扩展"), systemImage: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                    Text(L10n.tr("点击下方按钮，在「系统设置 → 通用 → 登录项与扩展 → 扩展」中开启 zeroflow 的「FinderSync」扩展。"))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Button(L10n.tr("打开扩展管理")) {
+                        FIFinderSyncController.showExtensionManagementInterface()
+                    }
+                }
+            }
+        }
+        .onAppear {
+            recheck()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            recheck()
+        }
+    }
+
+    private func recheck() {
+        enabled = FIFinderSyncController.isExtensionEnabled
     }
 }
 

@@ -1246,16 +1246,21 @@ struct EditorView: View {
     }
 
     /// 马赛克像素化叠加图缓存：同一半径的整图像素化只算一次，临时笔划与已提交笔划共用，
-    /// 保证预览与提交后的样式一致
+    /// 保证预览与提交后的样式一致。只保留当前半径一张（切到新半径时替换旧的），
+    /// 避免多半径各存一份整图造成的重复内存占用。
     private final class MosaicOverlayCache {
-        private var fullImages: [CGFloat: NSImage] = [:]
+        private var cachedRadius: CGFloat?
+        private var cachedOverlay: NSImage?
 
         func fullOverlay(radius: CGFloat, source: NSImage) -> NSImage? {
-            if let cached = fullImages[radius] { return cached }
+            if let cachedRadius, cachedRadius == radius, let cachedOverlay {
+                return cachedOverlay
+            }
             let fullRect = CGRect(origin: .zero, size: source.size)
             guard let overlay = EditorView.pixelatedImage(source, in: fullRect,
                                                           block: max(4, radius * 0.5)) else { return nil }
-            fullImages[radius] = overlay
+            cachedRadius = radius
+            cachedOverlay = overlay
             return overlay
         }
     }

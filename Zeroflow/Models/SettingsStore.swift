@@ -2,6 +2,11 @@ import SwiftUI
 import AppKit
 import ServiceManagement
 
+extension Notification.Name {
+    /// 通知 FinderSync 扩展设置已变化（与 FinderSyncExtension/FinderSync.swift 同名常量）
+    static let zeroflowFinderNewFileDidChange = Notification.Name("zeroflow.finderNewFileDidChange")
+}
+
 /// 设置持久化存储。M0 只负责存取，不接入真实全局热键。
 final class SettingsStore: ObservableObject {
     static let shared = SettingsStore()
@@ -19,9 +24,34 @@ final class SettingsStore: ObservableObject {
         static let cmdTabShortcutKeyCode = "cmdTabShortcut.keyCode"
         static let cmdTabShortcutModifiers = "cmdTabShortcut.modifiers"
         static let appLanguage = "appLanguage"
+        static let finderNewFileEnabled = "finderNewFileEnabled"
+        static let finderNewFileName = "finderNewFileName"
     }
 
     private let defaults: UserDefaults
+
+    /// 与 FinderSync 扩展共享的 App Group 容器。双方都带 8NHN73Q43T.com.zeroflow.app 授权,
+    /// 沙盒扩展的 UserDefaults(suiteName:) 读 App Group 不可靠(cfprefsd 报 Container: null),
+    /// 所以直接读写容器里同一份 plist 文件(见 saveFinderSharedSettings)。
+    static let finderSharedSuite = "8NHN73Q43T.com.zeroflow.app"
+    static let finderSharedFileName = "finder-sync-settings.plist"
+
+    private static var finderSharedURL: URL? {
+        FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: finderSharedSuite)?
+            .appendingPathComponent(finderSharedFileName)
+    }
+
+    /// 把访达新建文件相关设置写进 group container,供沙盒化的 FinderSync 扩展读取。
+    static func saveFinderSharedSettings(enabled: Bool, fileName: String, language: String) {
+        guard let url = finderSharedURL else { return }
+        let dict: [String: Any] = [
+            Keys.finderNewFileEnabled: enabled,
+            Keys.finderNewFileName: fileName,
+            Keys.appLanguage: language,
+        ]
+        (dict as NSDictionary).write(to: url, atomically: true)
+    }
 
     /// 默认保存位置：~/Downloads/zeroflow
     static var defaultSaveDirectory: String {
@@ -42,6 +72,8 @@ final class SettingsStore: ObservableObject {
             Keys.windowSwitcherShowWindowlessApps: true,
             Keys.cmdTabShortcutKeyCode: Int(ShortcutKey.cmdTabDefault.keyCode),
             Keys.cmdTabShortcutModifiers: Int(ShortcutKey.cmdTabDefault.modifiers.rawValue),
+            Keys.finderNewFileEnabled: false,
+            Keys.finderNewFileName: "new file.md",
         ])
         _launchAtLogin = Published(initialValue: defaults.bool(forKey: Keys.launchAtLogin))
         _saveDirectory = Published(initialValue: defaults.string(forKey: Keys.saveDirectory) ?? Self.defaultSaveDirectory)
@@ -50,10 +82,16 @@ final class SettingsStore: ObservableObject {
         _dockClickMinimize = Published(initialValue: defaults.bool(forKey: Keys.dockClickMinimize))
         _cmdTabSwitcherEnabled = Published(initialValue: defaults.bool(forKey: Keys.cmdTabSwitcherEnabled))
         _windowSwitcherShowWindowlessApps = Published(initialValue: defaults.bool(forKey: Keys.windowSwitcherShowWindowlessApps))
+        _finderNewFileEnabled = Published(initialValue: defaults.bool(forKey: Keys.finderNewFileEnabled))
+        _finderNewFileName = Published(initialValue: defaults.string(forKey: Keys.finderNewFileName) ?? "new file.md")
         _shortcut = Published(initialValue: Self.loadShortcut(from: defaults))
         _cmdTabShortcut = Published(initialValue: Self.loadCmdTabShortcut(from: defaults))
         _appLanguage = Published(initialValue: AppLanguage(rawValue: defaults.string(forKey: Keys.appLanguage) ?? "") ?? .system)
         ensureDefaultDirectoryExists()
+        // 用本次加载的真实值补齐 group container 共享文件（didSet 只在变更时触发）
+        Self.saveFinderSharedSettings(enabled: finderNewFileEnabled,
+                                      fileName: finderNewFileName,
+                                      language: appLanguage.rawValue)
     }
 
     // MARK: - 快捷键
@@ -244,6 +282,27 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    // MARK: - 访达新建文件
+
+    @Published var finderNewFileEnabled: Bool {
+        didSet {
+            defaults.set(finderNewFileEnabled, forKey: Keys.finderNewFileEnabled)
+            Self.saveFinderSharedSettings(enabled: finderNewFileEnabled, fileName: finderNewFileName, language: appLanguage.rawValue)
+            // 通知 FinderSync 扩展即时增删 directoryURLs（关闭时清空，Finder 零监控）
+            DistributedNotificationCenter.default().post(
+                name: .zeroflowFinderNewFileDidChange,
+                object: nil
+            )
+        }
+    }
+
+    @Published var finderNewFileName: String {
+        didSet {
+            defaults.set(finderNewFileName, forKey: Keys.finderNewFileName)
+            Self.saveFinderSharedSettings(enabled: finderNewFileEnabled, fileName: finderNewFileName, language: appLanguage.rawValue)
+        }
+    }
+
     @Published var cmdTabShortcut: ShortcutKey {
         didSet {
             defaults.set(Int(cmdTabShortcut.keyCode), forKey: Keys.cmdTabShortcutKeyCode)
@@ -261,6 +320,7 @@ final class SettingsStore: ObservableObject {
     @Published var appLanguage: AppLanguage {
         didSet {
             defaults.set(appLanguage.rawValue, forKey: Keys.appLanguage)
+            Self.saveFinderSharedSettings(enabled: finderNewFileEnabled, fileName: finderNewFileName, language: appLanguage.rawValue)
             NotificationCenter.default.post(name: L10n.didChangeNotification, object: nil)
         }
     }

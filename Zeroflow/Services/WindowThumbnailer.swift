@@ -21,7 +21,9 @@ final class WindowThumbnailer {
     private static let captureOptions: Int32 = (1 << 11) | (1 << 8) | (1 << 19)
     private let cacheTTL: TimeInterval = 5
     private let captureThrottle: TimeInterval = 0.8
-    private static let maxThumbSide: CGFloat = 400
+    private static let maxThumbSide: CGFloat = 320
+    /// 缩略图缓存上限：超出时淘汰最旧的（内存有界，长时间运行不会无限增长）
+    private static let maxCacheCount = 30
 
     private struct CaptureBridge {
         let mainConn: @convention(c) () -> Int32
@@ -97,8 +99,21 @@ final class WindowThumbnailer {
             cache[wid] = (thumb, now)
             out[wid] = thumb
         }
+        pruneCache(now: now)
         lock.unlock()
         return out
+    }
+
+    /// 钳制缓存内存：清掉超过 TTL 的过期条目（下次会话反正要重新抓），
+    /// 再超过数量上限时淘汰最旧的，保证长时间运行下缓存有界。
+    /// 节流表 `lastAttempt` 同样只增不删，一并按 TTL 清理。
+    private func pruneCache(now: Date) {
+        cache = cache.filter { now.timeIntervalSince($0.value.date) < cacheTTL }
+        lastAttempt = lastAttempt.filter { now.timeIntervalSince($0.value) < cacheTTL }
+        if cache.count > Self.maxCacheCount {
+            let byNewest = cache.sorted { $0.value.date > $1.value.date }
+            cache = Dictionary(uniqueKeysWithValues: byNewest.prefix(Self.maxCacheCount).map { ($0.key, $0.value) })
+        }
     }
 
     /// 逐窗口调用私有 API，返回 `[CGWindowID: CGImage?]`。

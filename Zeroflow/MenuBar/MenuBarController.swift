@@ -56,6 +56,12 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         // 窗口切换器：按开关初始状态启停（开关变化由 CommandTabSwitcher 自行监听恢复）
         CommandTabSwitcher.shared.reapply()
 
+        // 右键菜单扩展自愈：Sequoia/Tahoe 下 FinderSync 扩展更新后常有「已启用但右键菜单
+        // 不出现」的陈旧实例问题，启动时若已启用则重载一次，保证右键菜单立即可用。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            FinderSyncReloader.reloadIfNeeded()
+        }
+
         if ProcessInfo.processInfo.environment["ZEROFLOW_AUTO_CAPTURE"] == "1" {
             ZSLog("env ZEROFLOW_AUTO_CAPTURE: defer 1.5s then capture")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {

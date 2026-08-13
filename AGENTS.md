@@ -7,8 +7,8 @@ macOS 截图菜单栏工具(截图 + 画线/矩形/圆框/文字气泡/马赛克
 前置: macOS 14+、Xcode 16+。没有测试/lint 命令,唯一验证 = `xcodebuild` 通过 + 手动运行。
 
 ```bash
-# Debug
-xcodebuild -project Zeroflow.xcodeproj -scheme Zeroflow -configuration Debug -derivedDataPath build build
+# Debug（需 -allowProvisioningUpdates：App Group 自动配置新 profile）
+xcodebuild -project Zeroflow.xcodeproj -scheme Zeroflow -configuration Debug -derivedDataPath build -allowProvisioningUpdates build
 # 产物一般在 build/Build/Products/Debug/Zeroflow.app
 open build/Build/Products/Debug/Zeroflow.app
 ```
@@ -18,15 +18,23 @@ open build/Build/Products/Debug/Zeroflow.app
   -project Zeroflow.xcodeproj \
   -scheme Zeroflow \
   -configuration Release \
-  -derivedDataPath build
+  -derivedDataPath build \
+  -allowProvisioningUpdates \
   build
 # 产物一般在 build/Build/Products/Release/Zeroflow.app
 open build/Build/Products/Release/Zeroflow.app
 ```
+- **构建必须带 `-allowProvisioningUpdates`**: FinderSync 扩展 target 带 App Group(`8NHN73Q43T.com.zeroflow.app`,Team 前缀)与沙盒授权,需要 Xcode 自动生成/更新带该 App Group 的 provisioning profile;不带会直接 `No profiles ... were found` BUILD FAILED。
+- **FinderSync 扩展必须沙盒化**: pkd(pluginkit)会静默拒绝非沙盒的扩展(`com.apple.security.app-sandbox` 缺失时 `pluginkit -m` 永远不出现、`-a` 返回 0 却无任何日志)。扩展与主 app 通过 App Group(`8NHN73Q43T.com.zeroflow.app`)共享设置:主 app 非沙盒但带 `com.apple.security.application-groups`,双方直接读写 group container 里的 `finder-sync-settings.plist` 文件——**不要用 `UserDefaults(suiteName:)` 读 App Group**(沙盒扩展里读不到,cfprefsd 报 `Container: (null)`)。登记/启用一键脚本:`scripts/install-findersync.sh [Debug|Release]`,内含两个致命坑的规避:① **pkd 内存会僵住**,新扩展 `pluginkit -a` 返回 0 却查不到,必须 `killall pkd`;② **LS 残留的旧路径插件记录**(如 build 目录)会让 pkd 解析到无效路径而拒绝,必须先 `lsregister -u` 所有旧路径的 app 及其 appex,再只注册 /Applications。诊断用扩展的 os_log(`log show --predicate 'subsystem == "com.zeroflow.app.finderSync"'`)。**右键菜单项被 Finder 硬编码在菜单底部,无 API 调整位置**;**macOS Sequoia/Tahoe 陈旧扩展 bug**: app 重建/覆盖安装后扩展显示已启用但右键菜单不出现,手动关开一次即恢复——已程序化复现(`pluginkit -e ignore`→`-e use` election 循环):脚本 `install-findersync.sh` 内建(支持 `--reload-only`),主 app 启动自愈走 `Zeroflow/Services/FinderSyncReloader.swift`,设置页有「刷新右键菜单扩展」按钮。完整开发流程见 skill `findersync-workflow`。
+- **FinderSync 扩展三个沙盒/协议坑**(功能 Debug 时踩过):
+  ① **真实家目录**: 沙盒进程里 `FileManager.default.homeDirectoryForCurrentUser` 返回的是容器目录(`~/Library/Containers/<bundle>/Data`),直接当 `directoryURLs` 会让 Finder 完全不监控任何用户路径、`menu(for:)` 永不触发。要用 `URL(fileURLWithPath: "/Users/\(NSUserName())")` 拼真实家目录。
+  ② **`NSMenuItem.representedObject` 跨 XPC 不保留**: 点击动作回调里 `sender` 拿不到自定义 `representedObject`(会 `createFile: invalid sender`)。目标目录必须在动作里用 `FIFinderSyncController.default().targetedURL()`/`selectedItemURLs()` 重新推导(`targetDirectory()`),不要依赖 sender。
+  ③ **右键目录无写权限**: `files.user-selected.read-write` 不覆盖 FinderSync 右键目标(`deny file-write-create`),写文件必须加 `com.apple.security.temporary-exception.files.home-relative-path.read-write`(值 `["/"]`,覆盖整个家目录;不入 App Store 可接受)。
 - **产物路径不可靠**: Debug 产物可能落在 `build/Build/Intermediates.noindex/ArchiveIntermediates/.../Applications/Zeroflow.app`(`cp -R` 复制这个可能是坏符号链接)。用 `find <derived>/Build -name "Zeroflow.app"` 定位,复制用 `cp -R -L` 解引用,复制前 `rm -rf` 目标。
 - **dist/ 已被 gitignore**,是发布副本。部署流程: `rm -rf dist/Zeroflow.app && cp -R -L <找到的app> dist/ && pkill -f Zeroflow.app`,再 `open dist/Zeroflow.app`。
 - 给 `-derivedDataPath` 的目录若无写权限,构建会直接 `BUILD FAILED`(0644/只读目录),换一个可写路径。
 - **新增 .swift 文件自动纳入编译**: 工程用 `PBXFileSystemSynchronizedRootGroup`,不要手动改 pbxproj 加文件。
+- **新增 target 需手改 pbxproj**: 唯一的例外是 FinderSync 扩展 target(`FinderSyncExtension/`)。它也是 `PBXFileSystemSynchronizedRootGroup` 自动纳入源码,但 target 本身、Embed App Extensions 阶段、target dependency、FinderSync.framework 链接(App 用于 `FIFinderSyncController.isExtensionEnabled` 状态)都要在 pbxproj 里手工维护,改错会直接 `BUILD FAILED`。
 
 ## 架构要点
 
